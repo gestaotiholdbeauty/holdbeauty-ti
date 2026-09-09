@@ -4,7 +4,6 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Torre de Controle de Estoque — Hold Beauty</title>
-<script src="https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root[data-theme="light"] {
@@ -94,6 +93,7 @@ header .subtitle { color:var(--text-muted); font-size:13px; margin-top:2px; }
 
 /* ---------- modal ---------- */
 #modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.45); display:flex; align-items:center; justify-content:center; z-index:50; }
+#modal-overlay[hidden] { display:none; }
 #modal-box { background:var(--surface); color:var(--text); border-radius:10px; max-width:480px; width:92%; max-height:80vh; overflow-y:auto; padding:22px; }
 #modal-box h2 { font-size:16px; margin-bottom:4px; }
 #modal-box .modal-sub { color:var(--text-muted); font-size:12px; margin-bottom:12px; }
@@ -621,9 +621,38 @@ async function ocAppend(token, siteId, oc, retries=3) {
 }
 
 /* =========================================================================
-   MSAL / LOGIN
+   MSAL / LOGIN -- a biblioteca e carregada dinamicamente (com CDNs
+   alternativos) em vez de um <script src> fixo no <head>, porque um CDN
+   bloqueado silenciosamente (rede corporativa, DNS, etc.) nao pode travar
+   a pagina inteira sem explicar o motivo pro usuario.
    ========================================================================= */
-const msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+const MSAL_CDNS = [
+  "https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js",
+  "https://unpkg.com/@azure/msal-browser@3/lib/msal-browser.min.js",
+  "https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js",
+];
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve(src);
+    s.onerror = () => reject(new Error('falhou: ' + src));
+    document.head.appendChild(s);
+  });
+}
+async function ensureMsalLoaded() {
+  if (window.msal) return;
+  let lastErr = null;
+  for (const url of MSAL_CDNS) {
+    try {
+      await loadScript(url);
+      if (window.msal) return;
+    } catch (e) { lastErr = e; }
+  }
+  throw new Error('Nao consegui carregar a biblioteca de login da Microsoft (MSAL) de nenhum dos servidores tentados. ' + (lastErr ? lastErr.message : ''));
+}
+
+let msalInstance = null;
 let account = null;
 let siteIdCache = null;
 
@@ -877,27 +906,43 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  await msalInstance.initialize();
-  try { await msalInstance.handleRedirectPromise(); } catch (e) { /* ignore */ }
-  const accounts = msalInstance.getAllAccounts();
-  if (accounts.length > 0) {
-    account = accounts[0];
-    showApp();
-    atualizar();
-  } else {
-    showLogin();
+  const loginStatusEl = document.getElementById('login-status');
+  const loginBtn = document.getElementById('btn-login');
+
+  async function initMsalAndCheckSession() {
+    loginStatusEl.textContent = 'Carregando...';
+    await ensureMsalLoaded();
+    if (!msalInstance) msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+    await msalInstance.initialize();
+    try { await msalInstance.handleRedirectPromise(); } catch (e) { /* ignore */ }
+    loginStatusEl.textContent = '';
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+      account = accounts[0];
+      showApp();
+      atualizar();
+    }
   }
 
-  document.getElementById('btn-login').addEventListener('click', async () => {
-    const st = document.getElementById('login-status');
-    st.textContent = 'Entrando...';
+  initMsalAndCheckSession().catch(err => {
+    loginStatusEl.textContent = 'Erro ao preparar o login: ' + err.message;
+  });
+
+  loginBtn.addEventListener('click', async () => {
+    loginStatusEl.textContent = 'Entrando...';
     try {
+      if (!msalInstance) {
+        await ensureMsalLoaded();
+        msalInstance = new msal.PublicClientApplication(MSAL_CONFIG);
+        await msalInstance.initialize();
+      }
       const result = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
       account = result.account;
+      loginStatusEl.textContent = '';
       showApp();
       atualizar();
     } catch (err) {
-      st.textContent = 'Erro no login: ' + err.message;
+      loginStatusEl.textContent = 'Erro no login: ' + err.message;
     }
   });
 });
