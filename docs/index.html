@@ -126,6 +126,7 @@ header .subtitle { color:var(--text-muted); font-size:13px; margin-top:2px; }
       <span id="status-label"></span>
       <button id="btn-theme" class="btn">🌙 Escuro</button>
       <button id="btn-atualizar" class="btn btn-primary">Atualizar</button>
+      <button id="btn-logout" class="btn">Sair</button>
     </div>
   </header>
 
@@ -148,9 +149,9 @@ header .subtitle { color:var(--text-muted); font-size:13px; margin-top:2px; }
 
   <div id="tab-oc" class="tab-panel">
     <form id="oc-form">
-      <div><label>SKU</label><input name="sku" required /></div>
-      <div><label>Produto</label><input name="produto_nome" /></div>
-      <div><label>Fornecedor</label><input name="fornecedor" required /></div>
+      <div><label>SKU</label><input name="sku" required list="dl-sku" autocomplete="off" /><datalist id="dl-sku"></datalist></div>
+      <div><label>Produto</label><input name="produto_nome" list="dl-produto" autocomplete="off" /><datalist id="dl-produto"></datalist></div>
+      <div><label>Fornecedor</label><input name="fornecedor" required list="dl-fornecedor" autocomplete="off" /><datalist id="dl-fornecedor"></datalist></div>
       <div><label>Quantidade</label><input name="quantidade" type="number" step="any" required /></div>
       <div><label>Valor unitário</label><input name="valor_unitario" type="number" step="any" /></div>
       <div><label>Data prevista (AAAA-MM-DD)</label><input name="data_prevista" required placeholder="2026-10-15" /></div>
@@ -186,7 +187,7 @@ const MSAL_CONFIG = {
     authority: "https://login.microsoftonline.com/3075413c-ecbd-4162-955b-660d6163d85b",
     redirectUri: window.location.origin + window.location.pathname,
   },
-  cache: { cacheLocation: "localStorage", storeAuthStateInCookie: false },
+  cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: false },
 };
 const GRAPH_SCOPES = ["Sites.ReadWrite.All"];
 const WORKER_URL = "https://torre-estoque-proxy.titecnologiadainformacaohold.workers.dev";
@@ -675,6 +676,46 @@ let skuIndex = {};
 let lastData = null;
 let lastOcs = [];
 let appMode = "light";
+let produtosCache = []; // lista completa do Kondado (nao so os 53 da whitelist) -- pra autocompletar SKU/Produto no formulario de OC
+
+function populateDatalists() {
+  const dlSku = document.getElementById('dl-sku');
+  const dlProduto = document.getElementById('dl-produto');
+  const dlFornecedor = document.getElementById('dl-fornecedor');
+  if (dlSku) {
+    dlSku.innerHTML = '';
+    produtosCache.forEach(p => {
+      if (!p.codigo) return;
+      const opt = document.createElement('option');
+      opt.value = p.codigo;
+      opt.textContent = p.nome || '';
+      dlSku.appendChild(opt);
+    });
+  }
+  if (dlProduto) {
+    dlProduto.innerHTML = '';
+    const seen = new Set();
+    produtosCache.forEach(p => {
+      if (!p.nome || seen.has(p.nome)) return;
+      seen.add(p.nome);
+      const opt = document.createElement('option');
+      opt.value = p.nome;
+      dlProduto.appendChild(opt);
+    });
+  }
+  if (dlFornecedor) {
+    dlFornecedor.innerHTML = '';
+    const seen = new Set();
+    lastOcs.forEach(o => {
+      const f = (o.fornecedor || '').toString().trim();
+      if (!f || seen.has(f)) return;
+      seen.add(f);
+      const opt = document.createElement('option');
+      opt.value = f;
+      dlFornecedor.appendChild(opt);
+    });
+  }
+}
 
 function setStatus(txt) { document.getElementById('status-label').textContent = txt; }
 
@@ -817,10 +858,12 @@ async function atualizar() {
       ocListOpen(token, siteIdCache),
     ]);
     if (kondadoResp.error) throw new Error('Kondado: ' + kondadoResp.error);
+    produtosCache = kondadoResp.produtos || [];
     const data = computeStatus(kondadoResp.produtos, kondadoResp.estoque, kondadoResp.v30, kondadoResp.v3m, ocs);
     setStatus('Atualizado ' + fmtDateBr(data.gerado_em));
     renderStatus(data);
     renderOcs(ocs);
+    populateDatalists();
   } catch (e) {
     setStatus('Erro: ' + e.message);
     alert('Erro ao atualizar: ' + e.message);
@@ -868,6 +911,23 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('btn-theme').addEventListener('click', toggleTheme);
   document.getElementById('btn-atualizar').addEventListener('click', atualizar);
+  document.getElementById('btn-logout').addEventListener('click', () => {
+    sessionStorage.clear();
+    location.reload();
+  });
+
+  const skuInput = document.querySelector('#oc-form input[name=sku]');
+  const produtoInput = document.querySelector('#oc-form input[name=produto_nome]');
+  if (skuInput && produtoInput) {
+    skuInput.addEventListener('input', () => {
+      const p = produtosCache.find(x => x.codigo === skuInput.value);
+      if (p && p.nome) produtoInput.value = p.nome;
+    });
+    produtoInput.addEventListener('input', () => {
+      const p = produtosCache.find(x => x.nome === produtoInput.value);
+      if (p && p.codigo && !skuInput.value) skuInput.value = p.codigo;
+    });
+  }
 
   document.getElementById('oc-form').addEventListener('submit', async (e) => {
     e.preventDefault();
