@@ -85,6 +85,14 @@ header .subtitle { color:var(--text-muted); font-size:13px; margin-top:2px; }
 #oc-form input { width:100%; padding:7px 9px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text); font-size:13px; }
 #oc-form .origem-row { display:flex; gap:14px; align-items:center; font-size:13px; }
 #oc-form .actions { grid-column: 1 / -1; display:flex; align-items:center; gap:14px; margin-top:6px; }
+.ac-wrap { position:relative; }
+.ac-list { display:none; position:absolute; top:100%; left:0; right:0; z-index:20; background:var(--surface); border:1px solid var(--border); border-radius:6px; max-height:220px; overflow-y:auto; margin-top:2px; box-shadow:0 4px 14px rgba(0,0,0,0.18); }
+.ac-list.open { display:block; }
+.ac-item { padding:7px 9px; font-size:12.5px; cursor:pointer; border-bottom:1px solid var(--border); }
+.ac-item:last-child { border-bottom:none; }
+.ac-item:hover, .ac-item.active { background:var(--accent-soft); }
+.ac-item .ac-sub { color:var(--text-muted); font-size:11px; }
+.ac-empty { padding:7px 9px; font-size:12px; color:var(--text-muted); }
 #oc-form-msg { font-size:12px; color:var(--text-muted); }
 #oc-table-wrap { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
 #oc-table-wrap table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -149,9 +157,9 @@ header .subtitle { color:var(--text-muted); font-size:13px; margin-top:2px; }
 
   <div id="tab-oc" class="tab-panel">
     <form id="oc-form">
-      <div><label>SKU</label><input name="sku" required list="dl-sku" autocomplete="off" /><datalist id="dl-sku"></datalist></div>
-      <div><label>Produto</label><input name="produto_nome" list="dl-produto" autocomplete="off" /><datalist id="dl-produto"></datalist></div>
-      <div><label>Fornecedor</label><input name="fornecedor" required list="dl-fornecedor" autocomplete="off" /><datalist id="dl-fornecedor"></datalist></div>
+      <div class="ac-wrap"><label>SKU</label><input name="sku" required autocomplete="off" /><div class="ac-list" id="ac-sku"></div></div>
+      <div class="ac-wrap"><label>Produto</label><input name="produto_nome" autocomplete="off" /><div class="ac-list" id="ac-produto"></div></div>
+      <div class="ac-wrap"><label>Fornecedor</label><input name="fornecedor" required autocomplete="off" /><div class="ac-list" id="ac-fornecedor"></div></div>
       <div><label>Quantidade</label><input name="quantidade" type="number" step="any" required /></div>
       <div><label>Valor unitário</label><input name="valor_unitario" type="number" step="any" /></div>
       <div><label>Data prevista (AAAA-MM-DD)</label><input name="data_prevista" required placeholder="2026-10-15" /></div>
@@ -678,43 +686,108 @@ let lastOcs = [];
 let appMode = "light";
 let produtosCache = []; // lista completa do Kondado (nao so os 53 da whitelist) -- pra autocompletar SKU/Produto no formulario de OC
 
-function populateDatalists() {
-  const dlSku = document.getElementById('dl-sku');
-  const dlProduto = document.getElementById('dl-produto');
-  const dlFornecedor = document.getElementById('dl-fornecedor');
-  if (dlSku) {
-    dlSku.innerHTML = '';
-    produtosCache.forEach(p => {
-      if (!p.codigo) return;
-      const opt = document.createElement('option');
-      opt.value = p.codigo;
-      opt.textContent = p.nome || '';
-      dlSku.appendChild(opt);
-    });
+/* Autocompletar generico: mostra a lista completa ao focar/clicar, filtra
+   por qualquer palavra que bata em qualquer um dos campos de busca (nao
+   so o inicio do texto) -- assim digitar "cola" acha os produtos da
+   linha "Colas", mesmo que a palavra "cola" nao apareca no nome exato do
+   produto no Tiny. */
+function attachAutocomplete(input, listEl, getItems, opts) {
+  opts = opts || {};
+  let items = [];
+  let activeIdx = -1;
+
+  function close() { listEl.classList.remove('open'); listEl.innerHTML = ''; activeIdx = -1; }
+
+  function open(filterText) {
+    const all = getItems();
+    const q = (filterText || '').trim().toLowerCase();
+    items = q === ''
+      ? all
+      : all.filter(it => opts.searchText(it).toLowerCase().includes(q));
+    items = items.slice(0, 50);
+    listEl.innerHTML = '';
+    if (items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ac-empty';
+      empty.textContent = 'Nada encontrado.';
+      listEl.appendChild(empty);
+    } else {
+      items.forEach((it, idx) => {
+        const row = document.createElement('div');
+        row.className = 'ac-item';
+        row.innerHTML = opts.renderLabel(it);
+        row.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          opts.onSelect(it);
+          close();
+        });
+        row.addEventListener('mouseenter', () => { activeIdx = idx; highlight(); });
+        listEl.appendChild(row);
+      });
+    }
+    listEl.classList.add('open');
   }
-  if (dlProduto) {
-    dlProduto.innerHTML = '';
-    const seen = new Set();
-    produtosCache.forEach(p => {
-      if (!p.nome || seen.has(p.nome)) return;
-      seen.add(p.nome);
-      const opt = document.createElement('option');
-      opt.value = p.nome;
-      dlProduto.appendChild(opt);
-    });
+
+  function highlight() {
+    Array.from(listEl.children).forEach((el, i) => el.classList.toggle('active', i === activeIdx));
   }
-  if (dlFornecedor) {
-    dlFornecedor.innerHTML = '';
+
+  input.addEventListener('focus', () => open(input.value));
+  input.addEventListener('input', () => open(input.value));
+  input.addEventListener('keydown', (e) => {
+    if (!listEl.classList.contains('open')) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); highlight(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); highlight(); }
+    else if (e.key === 'Enter') { if (activeIdx >= 0 && items[activeIdx]) { e.preventDefault(); opts.onSelect(items[activeIdx]); close(); } }
+    else if (e.key === 'Escape') { close(); }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 150));
+}
+
+function linhaDoCodigo(codigo) { return WHITELIST_LINHA[codigo] || ''; }
+
+function setupOcAutocomplete() {
+  const skuInput = document.querySelector('#oc-form input[name=sku]');
+  const produtoInput = document.querySelector('#oc-form input[name=produto_nome]');
+  const fornecedorInput = document.querySelector('#oc-form input[name=fornecedor]');
+  const acSku = document.getElementById('ac-sku');
+  const acProduto = document.getElementById('ac-produto');
+  const acFornecedor = document.getElementById('ac-fornecedor');
+  if (!skuInput || !acSku) return;
+
+  const searchTextProduto = p => [p.codigo, p.nome, linhaDoCodigo(p.codigo)].filter(Boolean).join(' ');
+  const renderProduto = p => `<div>${escapeHtml(p.codigo)} — ${escapeHtml(p.nome||'')}</div><div class="ac-sub">${escapeHtml(linhaDoCodigo(p.codigo) || '')}</div>`;
+
+  attachAutocomplete(skuInput, acSku, () => produtosCache, {
+    searchText: searchTextProduto,
+    renderLabel: renderProduto,
+    onSelect: p => { skuInput.value = p.codigo; if (p.nome) produtoInput.value = p.nome; },
+  });
+
+  attachAutocomplete(produtoInput, acProduto, () => {
     const seen = new Set();
+    return produtosCache.filter(p => { if (!p.nome || seen.has(p.nome)) return false; seen.add(p.nome); return true; });
+  }, {
+    searchText: searchTextProduto,
+    renderLabel: renderProduto,
+    onSelect: p => { produtoInput.value = p.nome || ''; if (p.codigo) skuInput.value = p.codigo; },
+  });
+
+  attachAutocomplete(fornecedorInput, acFornecedor, () => {
+    const seen = new Set();
+    const out = [];
     lastOcs.forEach(o => {
       const f = (o.fornecedor || '').toString().trim();
       if (!f || seen.has(f)) return;
       seen.add(f);
-      const opt = document.createElement('option');
-      opt.value = f;
-      dlFornecedor.appendChild(opt);
+      out.push(f);
     });
-  }
+    return out;
+  }, {
+    searchText: f => f,
+    renderLabel: f => `<div>${escapeHtml(f)}</div>`,
+    onSelect: f => { fornecedorInput.value = f; },
+  });
 }
 
 function setStatus(txt) { document.getElementById('status-label').textContent = txt; }
@@ -863,7 +936,6 @@ async function atualizar() {
     setStatus('Atualizado ' + fmtDateBr(data.gerado_em));
     renderStatus(data);
     renderOcs(ocs);
-    populateDatalists();
   } catch (e) {
     setStatus('Erro: ' + e.message);
     alert('Erro ao atualizar: ' + e.message);
@@ -916,18 +988,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     location.reload();
   });
 
-  const skuInput = document.querySelector('#oc-form input[name=sku]');
-  const produtoInput = document.querySelector('#oc-form input[name=produto_nome]');
-  if (skuInput && produtoInput) {
-    skuInput.addEventListener('input', () => {
-      const p = produtosCache.find(x => x.codigo === skuInput.value);
-      if (p && p.nome) produtoInput.value = p.nome;
-    });
-    produtoInput.addEventListener('input', () => {
-      const p = produtosCache.find(x => x.nome === produtoInput.value);
-      if (p && p.codigo && !skuInput.value) skuInput.value = p.codigo;
-    });
-  }
+  setupOcAutocomplete();
 
   document.getElementById('oc-form').addEventListener('submit', async (e) => {
     e.preventDefault();
