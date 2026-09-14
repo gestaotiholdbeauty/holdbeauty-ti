@@ -233,22 +233,23 @@ const WHITELIST_LINHA = {
   "PSA0003": "Lash Lifting e Brow Lamination", "PSA0004": "Lash Lifting e Brow Lamination",
   "BP00097": "Lash Lifting e Brow Lamination", "BP000080": "Lash Lifting e Brow Lamination",
 };
-const DIAS_UTEIS_MES = 22;
-const LEADTIME_ASSUMIDO = 45;
-const ALVO_COBERTURA_POR_ORIGEM = { "Nacional": 60, "Importado": 90 };
-const ALVO_COBERTURA_PADRAO = 60;
+// Regra "Tudo em dias corridos" (Regras da régua, 14/09): mês = 30 dias corridos (não mais 22 dias úteis).
+// Leadtime assumido passou de 45 d.ú. para 63 dias corridos. Alvo de cobertura passou de 60/90 d.ú. para 84/126 dias corridos.
+const DIAS_MES = 30;
+const LEADTIME_ASSUMIDO = 63;
+const ALVO_COBERTURA_POR_ORIGEM = { "Nacional": 84, "Importado": 126 };
+const ALVO_COBERTURA_PADRAO = 84;
+// Regra "Faixas do ritmo" (a aprovar): acelerando >= 1.15x, estável entre 0.85x e 1.15x, desacelerando <= 0.85x
+// (antes o corte era 1.05x / 0.95x).
+const RITMO_ACELERANDO = 1.15;
+const RITMO_DESACELERANDO = 0.85;
 
+// Regra "Tudo em dias corridos" (Regras da régua, 14/09): datas somam dias corridos, sem pular fim de semana.
+// Mantido o nome addDiasUteis por compatibilidade com o resto do código, mas o cálculo agora é em dias corridos.
 function addDiasUteis(dataIni, n) {
   if (n === null || n === undefined || dataIni === null) return null;
   let d = new Date(dataIni.getTime());
-  let passos = Math.round(n);
-  let step = passos >= 0 ? 1 : -1;
-  let restante = Math.abs(passos);
-  while (restante > 0) {
-    d.setDate(d.getDate() + step);
-    const wd = d.getDay();
-    if (wd !== 0 && wd !== 6) restante--;
-  }
+  d.setDate(d.getDate() + Math.round(n));
   return d;
 }
 function toNum(v, def=0) {
@@ -327,11 +328,39 @@ function computeStatus(produtos, estoque, v30, v3m, ocs, hoje) {
     const q30 = toNum(v30By[codigo]);
     const q3m = toNum(v3mBy[codigo]);
     const mediaMensal3m = q3m / 3.0;
-    const vendaMediaDiaria = mediaMensal3m / DIAS_UTEIS_MES;
+
+    // Regra "Troca de régua, nos dois sentidos" (aprovado 14/09): quando o último mês (q30) passa de
+    // 1,5x a média do trimestre, OU fica em 0,50x ou menos dela, a demanda base deixa de ser a média
+    // do trimestre e passa a ser o mês mais recente (mesma mecânica pra cima e pra baixo).
+    // Obs.: a régua "Ruptura desfaz a troca" (que reverte só o gatilho de queda quando houve ruptura no
+    // período) não está implementada aqui porque a base de dados atual não guarda histórico de ruptura
+    // por SKU — só o saldo físico do momento.
+    let demandaBase = mediaMensal3m;
+    let trocaRegua = null;
+    if (mediaMensal3m > 0) {
+      if (q30 > 1.5 * mediaMensal3m) { demandaBase = q30; trocaRegua = "alta"; }
+      else if (q30 <= 0.5 * mediaMensal3m) { demandaBase = q30; trocaRegua = "queda"; }
+    }
+    const vendaMediaDiaria = demandaBase / DIAS_MES;
+
     let aceleracao;
     if (mediaMensal3m > 0) aceleracao = q30 / mediaMensal3m;
     else aceleracao = (q30 === 0) ? null : Infinity;
 
+    // Regra "Sem histórico" (a aprovar): aceleração de exatamente 3,00x = toda a venda do trimestre caiu
+    // no último mês (não há venda nos 2 meses anteriores) — é o teto da conta, não demanda explodindo.
+    const semHistorico = aceleracao !== null && aceleracao !== undefined && isFinite(aceleracao) && Math.abs(aceleracao - 3.0) < 0.005;
+
+    // Regra "Faixas do ritmo" (a aprovar): acelerando >= 1,15x · estável entre 0,85x e 1,15x · desacelerando <= 0,85x.
+    let faixaRitmo = null;
+    if (aceleracao !== null && aceleracao !== undefined && isFinite(aceleracao)) {
+      if (aceleracao >= RITMO_ACELERANDO) faixaRitmo = "acelerando";
+      else if (aceleracao <= RITMO_DESACELERANDO) faixaRitmo = "desacelerando";
+      else faixaRitmo = "estavel";
+    }
+
+    // Regra "Cobertura" (a aprovar): saldo FÍSICO ÷ venda diária. Usa o físico (não o disponível) —
+    // o reservado ainda está no depósito.
     const cobertura = vendaMediaDiaria > 0 ? saldo / vendaMediaDiaria : null;
     const dataRuptura = cobertura !== null ? addDiasUteis(hoje, Math.max(cobertura, 0)) : null;
     const pedirAte = dataRuptura !== null ? addDiasUteis(dataRuptura, -LEADTIME_ASSUMIDO) : null;
@@ -344,27 +373,52 @@ function computeStatus(produtos, estoque, v30, v3m, ocs, hoje) {
     const chegadaQtd = chegada ? chegada.qtd : null;
     const temChegadaATempo = chegadaData !== null && dataRuptura !== null && chegadaData.getTime() <= dataRuptura.getTime();
 
+    // Regra "Sem giro" (a aprovar): zero venda em 3 meses -> sem cobertura calculável, fica fora da régua.
+    const semGiro = q3m === 0;
+    // Regra "Giro baixo" (aprovado 13/09): cobertura acima de 12 meses (365 dias corridos) -> sai da
+    // régua de risco e desce na lista.
+    const giroBaixo = cobertura !== null && cobertura > 365;
+    // Regra "Fornecedor atrasado" (a aprovar): pedido de compra em aberto com previsão de chegada já
+    // vencida (independente de estar ou não em risco de ruptura).
+    const fornecedorAtrasado = !!(chegadaData !== null && chegadaData.getTime() < hoje.getTime());
+
+    // Regra "Ação necessária (vermelho)" (a aprovar): cobertura abaixo do alvo sem chegada antes da
+    // ruptura, ou saldo negativo. Campo mantido com o nome "risco" por compatibilidade com o resto do código.
     let risco;
-    if (cobertura === null) risco = false;
+    if (cobertura === null || semGiro || giroBaixo) risco = false;
     else if (saldo < 0) risco = true;
     else if (cobertura >= alvoCobertura) risco = false;
     else if (chegadaData === null) risco = true;
     else if (chegadaData.getTime() > dataRuptura.getTime()) risco = true;
     else risco = false;
 
-    const atrasado = !!(pedirAte !== null && pedirAte.getTime() < hoje.getTime() && !temChegadaATempo);
+    // Regra "Atenção (amarelo)" (a aprovar): abaixo do alvo mas com chegada que cobre a tempo, ou
+    // fornecedor atrasado (e o SKU não está em "Ação necessária").
+    const atencao = !risco && !semGiro && !giroBaixo &&
+      ((cobertura !== null && cobertura < alvoCobertura && temChegadaATempo) || fornecedorAtrasado);
+
+    // Campo "atrasado" mantido por compatibilidade (usado no KPI "Pedido atrasado" e nos filtros
+    // existentes) — agora reflete a regra "Fornecedor atrasado" acima, em vez do antigo prazo de repedido.
+    const atrasado = fornecedorAtrasado;
+
+    // Regra "Sugestão de compra" (a aprovar): venda diária x (leadtime + alvo) - saldo físico - o que já
+    // vem a caminho. Sem múltiplo de caixa nem pedido mínimo, que não existem no cadastro.
+    const sugestaoCompraBruta = vendaMediaDiaria * (LEADTIME_ASSUMIDO + alvoCobertura) - saldo - (chegadaQtd || 0);
+    const sugestaoCompra = cobertura === null ? null : Math.max(0, Math.round(sugestaoCompraBruta));
 
     skus.push({
       codigo, nome: p.nome, linha, marca: p.marca,
       saldo, reservado, disponivel, q30, q3m,
-      media_mensal_3m: mediaMensal3m, venda_media_diaria: vendaMediaDiaria, aceleracao,
+      media_mensal_3m: mediaMensal3m, demanda_base: demandaBase, troca_regua: trocaRegua,
+      venda_media_diaria: vendaMediaDiaria, aceleracao, sem_historico: semHistorico, faixa_ritmo: faixaRitmo,
       cobertura_du: cobertura,
       data_ruptura: dataRuptura ? isoDate(dataRuptura) : null,
       pedir_ate: pedirAte ? isoDate(pedirAte) : null,
       proxima_chegada_data: chegadaData ? isoDate(chegadaData) : null,
       proxima_chegada_qtd: chegadaQtd,
       origem, alvo_cobertura_du: alvoCobertura,
-      risco, atrasado, estoque_negativo: saldo < 0,
+      risco, atencao, atrasado, estoque_negativo: saldo < 0,
+      sem_giro: semGiro, giro_baixo: giroBaixo, sugestao_compra: sugestaoCompra,
     });
   }
 
@@ -432,17 +486,31 @@ function computeStatus(produtos, estoque, v30, v3m, ocs, hoje) {
 
 function explicacaoStatus(s, hoje) {
   const cov = s.cobertura_du;
-  const alvo = s.alvo_cobertura_du || 60;
+  const alvo = s.alvo_cobertura_du || ALVO_COBERTURA_PADRAO;
   const linhas = [];
+  if (s.sem_giro) {
+    linhas.push("Sem venda nos últimos 3 meses — sem cobertura calculável, por isso este SKU fica fora da régua de risco/atenção.");
+    return linhas;
+  }
   if (cov === null || cov === undefined) {
-    linhas.push("Sem venda nos últimos 3 meses — cobertura não dá pra calcular, por isso este SKU não entra na régua de risco/atraso.");
+    linhas.push("Sem venda nos últimos 3 meses — cobertura não dá pra calcular, por isso este SKU não entra na régua de risco/atenção.");
     return linhas;
   }
   let coberturaTxt;
-  if (cov < 0) coberturaTxt = `estoque já zerado há aproximadamente ${Math.abs(Math.round(cov))} dias úteis`;
-  else if (cov > 365) coberturaTxt = "estoque cobre mais de 365 dias úteis no ritmo atual";
-  else coberturaTxt = `${Math.round(cov)} dias úteis de estoque físico no ritmo de venda atual`;
-  linhas.push(`Cobertura: ${coberturaTxt} (alvo: ${alvo} dias úteis).`);
+  if (cov < 0) coberturaTxt = `estoque já zerado há aproximadamente ${Math.abs(Math.round(cov))} dias`;
+  else if (cov > 365) coberturaTxt = "estoque cobre mais de 365 dias corridos no ritmo atual";
+  else coberturaTxt = `${Math.round(cov)} dias corridos de estoque físico no ritmo de venda atual`;
+  linhas.push(`Cobertura: ${coberturaTxt} (alvo: ${alvo} dias corridos, origem ${s.origem || 'não informada'}).`);
+
+  if (s.giro_baixo) {
+    linhas.push("Giro baixo — cobertura acima de 12 meses (365 dias). Sai da régua de risco/atenção e desce na lista.");
+  }
+
+  if (s.troca_regua === "alta") {
+    linhas.push("Demanda base: os últimos 30 dias venderam mais de 1,5x a média do trimestre, então a régua trocou a média pelo mês mais recente (troca de régua pra cima).");
+  } else if (s.troca_regua === "queda") {
+    linhas.push("Demanda base: os últimos 30 dias venderam 0,5x ou menos da média do trimestre, então a régua trocou a média pelo mês mais recente (troca de régua pra baixo).");
+  }
 
   const chegada = s.proxima_chegada_data;
   if (chegada) {
@@ -452,36 +520,43 @@ function explicacaoStatus(s, hoje) {
     linhas.push("Próxima chegada: nenhum pedido de compra em aberto lançado pra este SKU.");
   }
 
-  if (s.risco) {
-    if (s.estoque_negativo) linhas.push("Em risco — o estoque físico já está negativo (vendeu mais do que existe).");
-    else if (!chegada) linhas.push(`Em risco — cobertura abaixo do alvo (${alvo} d.ú.) e não há chegada prevista pra cobrir.`);
-    else linhas.push(`Em risco — cobertura abaixo do alvo e a chegada prevista (${fmtDateBr(chegada)}) é depois da ruptura projetada (${fmtDateBr(s.data_ruptura)}): não chega a tempo.`);
-  } else if (cov < alvo && chegada) {
-    linhas.push(`Sem risco — cobertura está abaixo do alvo, mas a chegada prevista (${fmtDateBr(chegada)}) cobre a tempo.`);
-  } else {
-    linhas.push("Sem risco — cobertura já está no alvo ou acima dele.");
+  if (!s.giro_baixo) {
+    if (s.risco) {
+      if (s.estoque_negativo) linhas.push("Ação necessária — o estoque físico já está negativo (vendeu mais do que existe). Conta como ruptura.");
+      else if (!chegada) linhas.push(`Ação necessária — cobertura abaixo do alvo (${alvo} d.) e não há chegada prevista pra cobrir.`);
+      else linhas.push(`Ação necessária — cobertura abaixo do alvo e a chegada prevista (${fmtDateBr(chegada)}) é depois da ruptura projetada (${fmtDateBr(s.data_ruptura)}): não chega a tempo.`);
+    } else if (s.atencao) {
+      if (cov < alvo && chegada) linhas.push(`Atenção — cobertura está abaixo do alvo, mas a chegada prevista (${fmtDateBr(chegada)}) cobre a tempo.`);
+      else linhas.push("Atenção — fornecedor atrasado: há pedido de compra em aberto com previsão de chegada já vencida.");
+    } else {
+      linhas.push("Ok — cobertura já está no alvo ou acima dele, sem pendência de fornecedor.");
+    }
   }
 
   if (cov <= 365) {
-    linhas.push(`Ruptura projetada: ${fmtDateBr(s.data_ruptura)} (hoje + cobertura, pulando fins de semana).`);
-    linhas.push(`Pedir até: ${fmtDateBr(s.pedir_ate)} = ruptura projetada − 45 dias úteis (leadtime assumido).`);
+    linhas.push(`Ruptura projetada: ${fmtDateBr(s.data_ruptura)} (hoje + cobertura, em dias corridos).`);
+    linhas.push(`Pedir até: ${fmtDateBr(s.pedir_ate)} = ruptura projetada − ${LEADTIME_ASSUMIDO} dias corridos (leadtime assumido).`);
   } else {
     linhas.push("Cobertura tão alta que não há necessidade de pedido no horizonte atual.");
   }
 
-  const pedirAte = s.pedir_ate;
-  const hojeIso = isoDate(hoje);
-  if (s.atrasado) {
-    linhas.push('Atrasado — a data "pedir até" já passou e não há chegada prevista a tempo de cobrir a ruptura.');
-  } else if (pedirAte && pedirAte < hojeIso && chegada) {
-    linhas.push('A data "pedir até" já passou, mas não marcamos como atrasado porque a chegada prevista cobre a ruptura a tempo.');
+  if (s.fornecedor_atrasado || s.atrasado) {
+    linhas.push('Fornecedor atrasado — há pedido de compra em aberto cuja previsão de chegada já venceu.');
+  }
+
+  if (s.sugestao_compra !== null && s.sugestao_compra !== undefined) {
+    linhas.push(`Sugestão de compra: ${fmtNum(s.sugestao_compra)} un. = venda diária × (leadtime + alvo) − saldo físico − o que já vem a caminho (sem múltiplo de caixa/pedido mínimo).`);
   }
 
   const acel = s.aceleracao;
-  if (acel !== null && acel !== undefined) {
+  if (acel !== null && acel !== undefined && isFinite(acel)) {
     let ritmo;
-    if (acel >= 1.15) ritmo = "acelerando"; else if (acel <= 0.85) ritmo = "desacelerando"; else ritmo = "estável";
-    linhas.push(`Aceleração: vendeu ${Number(acel).toFixed(2)}x a média mensal nos últimos 30 dias — ritmo ${ritmo}.`);
+    if (acel >= RITMO_ACELERANDO) ritmo = "acelerando"; else if (acel <= RITMO_DESACELERANDO) ritmo = "desacelerando"; else ritmo = "estável";
+    if (s.sem_historico) {
+      linhas.push(`Aceleração: ${Number(acel).toFixed(2)}x — toda a venda do trimestre caiu no último mês (sem histórico nos 2 meses anteriores); é o teto da conta, não demanda explodindo.`);
+    } else {
+      linhas.push(`Aceleração: vendeu ${Number(acel).toFixed(2)}x a média mensal nos últimos 30 dias — ritmo ${ritmo}.`);
+    }
   }
   return linhas;
 }
@@ -809,7 +884,7 @@ function renderStatus(data) {
 
   const head = document.createElement('div');
   head.className = 'row row-head';
-  head.innerHTML = '<div class="col col-nome">Linha / Código — Produto</div><div class="col">Saldo</div><div class="col">Cobertura (d.u.)</div><div class="col">Aceleração</div><div class="col">Próx. chegada</div><div class="col">Data ruptura</div><div class="col">Pedir até</div><div class="col">Status</div>';
+  head.innerHTML = '<div class="col col-nome">Linha / Código — Produto</div><div class="col">Saldo</div><div class="col">Cobertura (dias)</div><div class="col">Aceleração</div><div class="col">Próx. chegada</div><div class="col">Data ruptura</div><div class="col">Pedir até</div><div class="col">Status</div>';
   table.appendChild(head);
 
   data.linhas.forEach(linhaInfo => {
@@ -828,8 +903,14 @@ function renderStatus(data) {
 
     if (isOpen) {
       skus.forEach(s => {
-        const tag = s.atrasado ? 'atrasado' : (s.risco ? 'risco' : 'ok');
-        const statusTxt = s.atrasado ? 'Atrasado' : (s.risco ? 'Em risco' : 'Ok');
+        // Regras "Ação necessária (vermelho)" / "Atenção (amarelo)" / Giro baixo / Sem giro (Regras da régua).
+        // Reaproveita as classes CSS existentes: tag-atrasado = vermelho (crítico), tag-risco = amarelo (atenção).
+        let tag, statusTxt;
+        if (s.giro_baixo) { tag = 'ok'; statusTxt = 'Giro baixo'; }
+        else if (s.sem_giro) { tag = 'ok'; statusTxt = 'Sem giro'; }
+        else if (s.risco) { tag = 'atrasado'; statusTxt = 'Ação necessária'; }
+        else if (s.atencao) { tag = 'risco'; statusTxt = 'Atenção'; }
+        else { tag = 'ok'; statusTxt = 'Ok'; }
         const row = document.createElement('div');
         row.className = `row row-sku tag-${tag}`;
         row.innerHTML = `<div class="col col-nome">${escapeHtml(s.codigo)} — ${escapeHtml(s.nome||'')}</div><div class="col">${fmtNum(s.saldo)}</div><div class="col">${s.cobertura_du===null?'-':fmtNum(s.cobertura_du)}</div><div class="col">${s.aceleracao===null||s.aceleracao===undefined?'-':s.aceleracao.toFixed(2)+'x'}</div><div class="col">${fmtDateBr(s.proxima_chegada_data)}</div><div class="col">${fmtDateBr(s.data_ruptura)}</div><div class="col">${fmtDateBr(s.pedir_ate)}</div><div class="col">${statusTxt} <span class="info-icon">ⓘ</span></div>`;
@@ -876,7 +957,12 @@ function showSkuDetail(s) {
 
 function showKpiList(title, skus) {
   const rowsHtml = skus.map(s => {
-    const statusTxt = s.atrasado ? 'Atrasado' : (s.risco ? 'Em risco' : 'Ok');
+    let statusTxt;
+    if (s.giro_baixo) statusTxt = 'Giro baixo';
+    else if (s.sem_giro) statusTxt = 'Sem giro';
+    else if (s.risco) statusTxt = 'Ação necessária';
+    else if (s.atencao) statusTxt = 'Atenção';
+    else statusTxt = 'Ok';
     return `<tr data-codigo="${escapeHtml(s.codigo)}"><td>${escapeHtml(s.linha)}</td><td>${escapeHtml(s.codigo)}</td><td>${escapeHtml(s.nome||'')}</td><td>${fmtNum(s.saldo)}</td><td>${s.cobertura_du===null?'-':fmtNum(s.cobertura_du)}</td><td>${statusTxt}</td></tr>`;
   }).join('');
   showModal(`
