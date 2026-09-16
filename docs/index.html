@@ -545,7 +545,10 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
 
 <div class="warnline" id="warnline" hidden></div>
 
-<div class="foot">
+<div style="padding:6px 4px">
+  <button class="footlink" id="btn-legenda" aria-expanded="false">Legenda e regras de cálculo ▾</button>
+</div>
+<div class="foot" id="foot-legenda" hidden>
   <div class="legend">
     <span style="color:var(--red)"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M8.6 3h6.8L21 8.6v6.8L15.4 21H8.6L3 15.4V8.6z"/><path d="m9.5 9.5 5 5M14.5 9.5l-5 5"/></svg> Ação necessária</span>
     <span style="color:var(--amber)"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z"/><path d="M12 7.5v5"/><path d="M12 16h.01"/></svg> Atenção</span>
@@ -1215,6 +1218,7 @@ function renderFiltros(){
   const fm = document.getElementById("f-marca"); fm.innerHTML = "";
   fm.append(chip("Todas", null, !state.marca, ()=>{state.marca=null;render();}));
   MARCAS.forEach(m=>{
+    if (!m || m === "—") return;
     const n = universo().filter(s=>s.marca===m).length;
     if (!n) return;
     fm.append(chip(titulo(m), n, state.marca===m, ()=>{ state.marca = state.marca===m?null:m; render(); }));
@@ -2012,6 +2016,13 @@ document.getElementById("btn-entrada").onclick = abrirCapa;
 if (window.ResizeObserver) new ResizeObserver(()=>{
   if (!document.getElementById("entrada").hidden) ajustaCapa();
 }).observe(document.getElementById("entrada"));
+document.getElementById("btn-legenda").onclick = (e)=>{
+  const el = document.getElementById("foot-legenda");
+  const abrir = el.hidden;
+  el.hidden = !abrir;
+  e.target.setAttribute("aria-expanded", String(abrir));
+  e.target.textContent = "Legenda e regras de cálculo " + (abrir ? "▴" : "▾");
+};
 document.getElementById("btn-login").onclick = fazerLogin;
 document.getElementById("btn-logout").onclick = fazerLogout;
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(()=>{
