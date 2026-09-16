@@ -487,6 +487,7 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
       <span class="stamp" id="stamp">Atualizado 14/09/2026 · base de NF até 14/09</span>
       <button class="btn ajuda-top" id="btn-situacoes" title="O que cada selo e cada ícone querem dizer">?</button>
       <button class="btn" id="btn-regras"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 3.5v6M6 13.5v7M12 3.5v10M12 17.5v3M18 3.5v3.5M18 11v9.5"/><path d="M6 9.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/><path d="M12 13.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/><path d="M18 7a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>Regras da régua</button>
+      <a class="btn" id="link-doc-regras" href="cao-de-suprimentos-regras.html" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;text-decoration:none;cursor:pointer"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 4h9l4 4v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M14 4v4h4"/><path d="M8 12h8M8 15.5h8M8 8.5h3"/></svg>Documento de regras</a>
       <button class="btn" id="btn-theme">Tema escuro</button>
       <button class="btn btn-primary" id="btn-atualizar"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/><path d="M20.8 3.5v5.2h-5.2"/></svg>Atualizar</button>
       <span class="stamp" id="login-user" style="margin-left:4px"></span>
@@ -2020,16 +2021,4 @@ document.getElementById("btn-legenda").onclick = (e)=>{
   const el = document.getElementById("foot-legenda");
   const abrir = el.hidden;
   el.hidden = !abrir;
-  e.target.setAttribute("aria-expanded", String(abrir));
-  e.target.textContent = "Legenda e regras de cálculo " + (abrir ? "▴" : "▾");
-};
-document.getElementById("btn-login").onclick = fazerLogin;
-document.getElementById("btn-logout").onclick = fazerLogout;
-if (document.fonts && document.fonts.ready) document.fonts.ready.then(()=>{
-  const ent = document.getElementById("entrada");
-  if (ent && !ent.hidden) ajustaCapa(); });
-initMsalAndCheckSession();
-</script>
-
-</body>
-</html>
+  e.target.setAttribute("aria-expanded", Str
