@@ -3280,7 +3280,7 @@ function renderPedidos(){
       (AO_VIVO ? simuladas.length+' OCs em aberto na planilha do SharePoint contam na cobertura'
                : simuladas.length+' pedidos simulados da maquete ainda contam na cobertura')+
       '</summary><p class="dim">'+(AO_VIVO
-        ? 'Lidas da aba OC\'s da planilha Base_de_Dados_-_Power_BI (SharePoint, AREA_BI) no último Atualizar. '+
+        ? 'Lidas da aba OC\'s da planilha '+esc(DRIVE_ITEM_PATH.split("/").pop())+' (SharePoint, AREA_BI) no último Atualizar. '+
           'Ordem lançada aqui na torre para o mesmo SKU tem prioridade sobre a planilha.'
         : 'Foram inventados para a demonstração — '+
           'a planilha de OC nunca esteve conectada, e o Kondado só traz pedido de venda. '+
@@ -4363,6 +4363,7 @@ const GRAPH_SCOPES = ["Sites.ReadWrite.All"];
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const SITE_HOSTNAME = "holdbeautyimportacao.sharepoint.com";
 const SITE_PATH = "AREA_BI";
+/* planilha de BI (conteúdo do Portal - Compras): aba OC's, tabela Tabela1 */
 const DRIVE_ITEM_PATH = "BI_Dados/Base_de_Dados_-_Power_BI .xlsx";
 const SHEET_NAME = "OC's";
 const WORKER_URL = "https://torre-estoque-proxy.titecnologiadainformacaohold.workers.dev";
@@ -4399,29 +4400,77 @@ async function ocListOpen(token, siteId){
   if (!wb.SheetNames.includes(SHEET_NAME))
     throw new Error("Aba '" + SHEET_NAME + "' não encontrada. Abas: " + wb.SheetNames.join(", "));
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[SHEET_NAME], { header: 1, defval: null });
-  const H = {}; (rows[0]||[]).forEach((h,i)=>{ h = String(h||"").trim().toLowerCase(); if (h) H[h] = i; });
-  const col = (r, k) => H[k] === undefined ? null : (r[H[k]] ?? null);
-  const iso = v => { const d = _toDate(v); return d ? _isoDate(d) : null; };
-  const out = [];
+  /* cabeçalho normalizado: minúsculo, sem acento, espaços simples */
+  const norm = h => String(h||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+                     .toLowerCase().replace(/\s+/g," ").trim().replace(/\s*:+$/,"").trim();
+  const H = {}; (rows[0]||[]).forEach((h,i)=>{ h = norm(h); if (h && H[h] === undefined) H[h] = i; });
+  /* nomes reais da aba OC's primeiro; os antigos ficam como reserva */
+  const ALIAS = {
+    sku:          ["sku","codigo","codigo (sku)"],
+    numero:       ["oc / invoice","oc/invoice","oc","numero"],
+    fornecedor:   ["fornecedor"],
+    descricao:    ["descricao","produto_nome","produto"],
+    origem:       ["origem"],
+    leadtime:     ["leadtime"],
+    quantidade:   ["quantidade oc","quantidade"],
+    nf:           ["nf"],
+    quantidade_nf:["quantidade nf"],
+    data_prevista:["previsao/eta","previsao / eta","eta","data_prevista"],
+    data_coleta:  ["coleta/etd","coleta / etd","etd"],
+    data_pedido:  ["data","data_pedido"],
+    data_entrega: ["entrega","data_entrega"],
+    status:       ["status"],
+  };
+  const idx = {}; Object.entries(ALIAS).forEach(([k, alts])=>{
+    const a = alts.find(x => H[norm(x)] !== undefined); idx[k] = a === undefined ? undefined : H[norm(a)]; });
+  if (idx.sku === undefined || idx.quantidade === undefined || idx.data_prevista === undefined)
+    throw new Error("Aba '" + SHEET_NAME + "': não achei as colunas SKU, Quantidade OC e Previsão/ETA. Cabeçalho lido: " +
+                    (rows[0]||[]).filter(Boolean).join(" · "));
+  const col = (r, k) => idx[k] === undefined ? null : (r[idx[k]] ?? null);
+  const iso = v => {
+    if (typeof v === "number" && v > 20000 && v < 80000)          /* data serial do Excel */
+      return _isoDate(new Date(Math.round((v - 25569) * 86400000) + 12*3600000));
+    const d = _toDate(v); return d ? _isoDate(d) : null;
+  };
+  const FECHADA = /entreg|receb|finaliz|conclu|cancel/i;
+  const out = [], semSku = [];
   for (let i = 1; i < rows.length; i++){
     const r = rows[i];
     if (!r || r.every(v => v === null || v === "")) continue;
+    const sku = col(r,"sku");
+    const skuTxt = sku === null ? "" : String(sku).trim();
+    /* SKU vem de um PROCX na planilha: 0 ou #N/D = descrição que não achou na aba Produtos */
+    if (!skuTxt || skuTxt === "0" || /^#/.test(skuTxt)){
+      if (col(r,"descricao") || col(r,"quantidade")) semSku.push({
+        oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: String(col(r,"status")||"").trim()});
+      continue;
+    }
+    const qOC = _toNum(col(r,"quantidade")), qNF = _toNum(col(r,"quantidade_nf"));
+    const entrega = iso(col(r,"data_entrega"));
+    const stTxt = String(col(r,"status") || "").trim();
+    const fechada = FECHADA.test(stTxt) || (!!entrega && !(qNF > 0 && qNF < qOC));
     out.push({
-      sku: col(r,"sku") !== null ? String(col(r,"sku")).trim() : null,
-      produto_nome: col(r,"produto_nome") ?? col(r,"produto"),
+      sku: skuTxt,
+      numero: col(r,"numero") !== null ? String(col(r,"numero")).trim() : null,
+      produto_nome: col(r,"descricao"),
       fornecedor: col(r,"fornecedor"),
-      quantidade: _toNum(col(r,"quantidade")),
-      valor_unitario: col(r,"valor_unitario"),
+      /* entrega parcial: o que falta chegar é a OC menos o que já veio na NF */
+      quantidade: fechada ? qOC : Math.max(0, qOC - (qNF > 0 ? qNF : 0)),
+      quantidade_oc: qOC, quantidade_nf: qNF || null, nf: col(r,"nf"),
       data_prevista: iso(col(r,"data_prevista")),
+      data_coleta: iso(col(r,"data_coleta")),
       data_pedido: iso(col(r,"data_pedido")),
-      data_entrega: iso(col(r,"data_entrega")),
+      data_entrega: entrega,
       origem: col(r,"origem"),
-      status: col(r,"status") || "Pendente",
+      leadtime: col(r,"leadtime"),
+      status: fechada ? (/cancel/i.test(stTxt) ? "Cancelado" : "Entregue") : "Pendente",
+      status_planilha: stTxt || null,
     });
   }
+  out.semSku = semSku;
   return out;
 }
-const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelado" && o.data_prevista;
+const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelado" && o.data_prevista && o.quantidade > 0;
 
 /* ---------- aplica o dado ao vivo em cima do catálogo da torre ----------
    A lista de itens (acabado, kits, insumos, fichas) continua a da torre; o que
@@ -4561,9 +4610,12 @@ async function atualizar(){
     document.getElementById("stamp").textContent = "Atualizado " + dbr(DATA.gerado_em) + " às " + hm + " · Kondado + SharePoint";
     document.getElementById("nota-fonte").innerHTML =
       "<b>Dado ao vivo.</b> Estoque, cadastro e venda (nota fiscal emitida) vêm do <b>Tiny via Kondado</b>; " +
-      "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>Base_de_Dados_-_Power_BI</b> no SharePoint (AREA_BI). " +
+      "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>" + esc(DRIVE_ITEM_PATH.split("/").pop()) + "</b> no SharePoint (AREA_BI). " +
       res.atualizados + " itens atualizados · " + ocs.filter(ocAberta).length + " OCs em aberto" +
-      (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + ".";
+      (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + "." +
+      (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
+        return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
+          ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
     render();
   } catch(e){
     alert("Erro ao atualizar: " + e.message);
