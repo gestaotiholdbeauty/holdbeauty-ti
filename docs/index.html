@@ -3401,6 +3401,16 @@ function telaOrdem(){
   return box;
 }
 
+/* o formulario e redesenhado a cada item que entra ou sai: guarda o que ja foi digitado */
+function guardaCabecalhoOC(box, o){
+  const g = (id)=>{ const el = box.querySelector(id); return el ? el.value : null; };
+  const n = g("#o-num"), t = g("#o-tiny"), dp = g("#o-dped"), dv = g("#o-dprev"), ob = g("#o-obs");
+  if (n !== null && n.trim()) o.numero = n.trim();
+  if (t !== null) o.numero_tiny = t.trim();
+  if (dp) o.data_pedido = dp;
+  if (dv) o.data_prevista = dv;
+  if (ob !== null) o.obs = ob;
+}
 function ligarFormOC(box){
   const o = state.ped.form;
   const fh = box.querySelector("#o-forn");
@@ -3422,15 +3432,18 @@ function ligarFormOC(box){
       if (q <= 1 && s0) q = Math.max(1, ef(s0).sugestao || 1);
       o.itens.push({c:cod, qtd:q, recebido:0});
       if (!o.fornecedor && FORN_SKU[cod]) o.fornecedor = FORN_SKU[cod].forn;
-      renderPedidos();
+      guardaCabecalhoOC(box, o); renderPedidos();
     }
   });
   box.querySelectorAll("[data-q]").forEach(inp=>{
     inp.onchange = ()=>{ const v = Math.floor(Number(inp.value));
-      if (v > 0) o.itens[+inp.dataset.q].qtd = v; else inp.value = o.itens[+inp.dataset.q].qtd; };
+      if (v > 0) o.itens[+inp.dataset.q].qtd = v; else inp.value = o.itens[+inp.dataset.q].qtd;
+      const tot = box.querySelector(".ope .dir b"); if (tot) tot.textContent = nf(faltaDe(o)); };
+    inp.oninput = ()=>{ const v = Math.floor(Number(inp.value)); if (v > 0){ o.itens[+inp.dataset.q].qtd = v;
+      const tot = box.querySelector(".ope .dir b"); if (tot) tot.textContent = nf(faltaDe(o)); } };
   });
   box.querySelectorAll("[data-del]").forEach(b=>{
-    b.onclick = ()=>{ o.itens.splice(+b.dataset.del, 1); renderPedidos(); };
+    b.onclick = ()=>{ o.itens.splice(+b.dataset.del, 1); guardaCabecalhoOC(box, o); renderPedidos(); };
   });
   const v = box.querySelector("#o-voltar");
   if (v) v.onclick = ()=>{ state.ped.form = null; renderPedidos(); };
@@ -3447,7 +3460,7 @@ function ligarFormOC(box){
     ORDENS[o.id] = o; gravarOrdem(o.id);
     state.ped.form = null; state.sel.clear();
     explodir(); render();
-    if (!jaEra) confirmaOrdem(o, "registrada");
+    if (!jaEra){ confirmaOrdem(o, "registrada"); mandarOCPlanilha(o); }
   };
 }
 
@@ -4469,6 +4482,76 @@ async function ocListOpen(token, siteId){
   }
   out.semSku = semSku;
   return out;
+}
+/* ---------- escreve a OC na planilha de BI (aba OC's, tabela Tabela1) ----------
+   Uma linha por item. Origem, SKU, Leadtime, atraso e Leadtime real ficam com as
+   formulas da propria tabela; a Previsao/ETA vai com a data digitada na torre.
+   A Descricao precisa ser a da aba Produtos, senao o PROCX do SKU devolve 0. */
+const TABELA_OC = "Tabela1";
+function _serialExcel(iso){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ""); if (!m) return "";
+  return (Date.UTC(+m[1], +m[2]-1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000;
+}
+async function graphJson(url, token, method, body){
+  const resp = await fetch(url, { method: method || "GET",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined });
+  if (!resp.ok){ const t = await resp.text().catch(()=> "");
+    throw new Error("SharePoint HTTP " + resp.status + ": " + t.slice(0,300)); }
+  return resp.status === 204 ? null : resp.json();
+}
+async function escreverOCPlanilha(o){
+  if (!account || !msalInstance) throw new Error("sem login da Microsoft");
+  const token = await getGraphToken();
+  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+  const wb = GRAPH_BASE + "/sites/" + siteIdCache + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/workbook";
+  /* SKU -> descricao exata da aba Produtos */
+  const prod = await graphJson(wb + "/worksheets('Produtos')/usedRange(valuesOnly=true)?$select=values", token);
+  const desc = {};
+  (prod.values || []).slice(1).forEach(r=>{ const k = String(r[2]||"").trim().toUpperCase(); if (k && !desc[k]) desc[k] = String(r[1]||"").trim(); });
+  const semCadastro = [];
+  const obs = [o.obs, "Lançada pela Torre" + (USUARIO ? " por " + USUARIO : "") + (o.numero_tiny ? " · Tiny " + o.numero_tiny : "")]
+                .filter(Boolean).join(" · ");
+  const linhas = (o.itens||[]).map(it=>{
+    const d = desc[String(it.c).trim().toUpperCase()];
+    const P = PORCOD[it.c];
+    if (!d) semCadastro.push(it.c);
+    const L = new Array(30).fill("");
+    L[0]  = _serialExcel(o.data_pedido || HOJE_ISO);                 /* Data */
+    L[1]  = o.numero || "";                                          /* OC / Invoice */
+    L[2]  = o.fornecedor || "";                                      /* Fornecedor */
+    L[3]  = d || (P ? String(P.nome).toUpperCase() : it.c);          /* Descricao */
+    L[4]  = "=XLOOKUP([@[Fornecedor:]],Listas!A:A,Listas!B:B,0)";    /* Origem */
+    L[5]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!C:C,0)"; /* SKU */
+    L[6]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!E:E,0)"; /* Leadtime */
+    L[7]  = it.qtd || 0;                                             /* Quantidade OC */
+    L[10] = _serialExcel(o.data_prevista);                           /* Previsao/ETA */
+    L[13] = "=[@[Entrega:]]-[@[Previsão/ETA:]]";                     /* atraso */
+    L[14] = '=IF([@[Status:]]="Entregue",[@[Entrega:]]-[@[Data:]],0)'; /* Leadtime real */
+    L[15] = "Pendente";                                              /* Status */
+    L[28] = obs;                                                     /* Observacoes */
+    return L;
+  });
+  if (!linhas.length) return { semCadastro };
+  await graphJson(wb + "/tables/" + TABELA_OC + "/rows/add", token, "POST", { index: null, values: linhas });
+  return { semCadastro };
+}
+async function mandarOCPlanilha(o){
+  const cs = document.getElementById("conf-s");
+  const aviso = (html)=>{ if (cs && document.getElementById("conf-t")) cs.innerHTML += "<br><br>" + html; };
+  aviso('<span id="oc-planilha">Gravando na planilha de BI (aba OC\'s)…</span>');
+  const marca = (html)=>{ const el = document.getElementById("oc-planilha"); if (el) el.innerHTML = html; };
+  try {
+    const r = await escreverOCPlanilha(o);
+    o.planilha = { em: new Date().toISOString(), ok: true }; gravarOrdem(o.id);
+    marca("<b>Gravada na planilha de BI</b> (aba OC's)." + (r.semCadastro.length
+      ? " Atenção: " + r.semCadastro.map(esc).join(", ") + " não está na aba Produtos — a linha entrou, mas o SKU vai sair 0 até cadastrar lá."
+      : ""));
+  } catch(e){
+    o.planilha = { em: new Date().toISOString(), ok: false, erro: String(e.message||e) }; gravarOrdem(o.id);
+    marca('<b style="color:var(--red,#d33)">Não consegui gravar na planilha:</b> ' + esc(String(e.message||e)) +
+          ". A ordem ficou só na torre — lance a linha na aba OC's à mão.");
+  }
 }
 const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelado" && o.data_prevista && o.quantidade > 0;
 
