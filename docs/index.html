@@ -2436,8 +2436,9 @@ const MESES_EXT = ["janeiro","fevereiro","março","abril","maio","junho",
 const mesExt = key => MESES_EXT[Number(key.slice(5,7))-1];
 const mesNum = key => key.slice(5,7);
 const BASE_INI = "2026-04";   /* a NF do Kondado começa em 28/04/2026 */
-const MES_HOJE = "2026-09";
-const DIA_HOJE = 15, DIAS_MES = 30;
+/* valem para a base gravada no arquivo; com dado ao vivo, aplicarAoVivo troca pela data de hoje */
+let MES_HOJE = "2026-09";
+let DIA_HOJE = 15, DIAS_MES = 30;
 
 function janela12(){           /* 12 colunas terminando no mês atual */
   const out = [];
@@ -4572,6 +4573,16 @@ function aplicarAoVivo(k, ocs){
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const hojeIso = _isoDate(hoje);
   DATA.gerado_em = hojeIso; HOJE_ISO = hojeIso;
+  MES_HOJE = hojeIso.slice(0,7); DIA_HOJE = hoje.getDate();
+  DIAS_MES = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate();
+
+  /* venda mensal por NF (chave vmes do Worker): refaz a serie do grafico e o "vendas no mes".
+     Sem ela, a serie fica a gravada no arquivo — e o mes corrente para no dia da gravacao. */
+  const vm = {}, temVm = Array.isArray(k.vmes) && k.vmes.length > 0;
+  (k.vmes||[]).forEach(r => { if (!r.sku || !r.mes) return; (vm[r.sku] || (vm[r.sku] = {}))[r.mes] = _toNum(r.qtd); });
+  const mesesVivos = [];
+  if (temVm){ let [a, m] = BASE_INI.split("-").map(Number);
+    while (true){ const key = a+"-"+String(m).padStart(2,"0"); if (key > MES_HOJE) break; mesesVivos.push(key); if (++m > 12){ m = 1; a++; } } }
 
   const est = {}, prod = {}, v30 = {}, v3m = {};
   (k.produtos||[]).forEach(p => { if (p.codigo) prod[p.codigo] = p; });
@@ -4613,6 +4624,12 @@ function aplicarAoVivo(k, ocs){
                    pedir_ate: maisDias(rup, -s.leadtime), risco: s.saldo < 0 || cob < s.alvo,
                    sugestao: null, giro_baixo: cob > 365, sem_giro: false};
       } else s.alt3m = null;
+    }
+    if (temVm){
+      const vivo = vm[s.codigo] || {}, ser = {};
+      Object.keys(s.serie || {}).forEach(m => { if (m < BASE_INI) ser[m] = s.serie[m]; });
+      mesesVivos.forEach(m => { ser[m] = vivo[m] || 0; });
+      s.serie = ser; s.mes_atual = ser[MES_HOJE] || 0;
     }
     const c = cheg[s.codigo];
     s.chegada_data = c ? c.d : null; s.chegada_qtd = c ? c.q : null; s.chegada_forn = c ? c.f : null;
