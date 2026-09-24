@@ -1785,6 +1785,8 @@ function aplicarOrdens(){
   const porSku = {};
   Object.values(ORDENS).forEach(o=>{
     if (o.tipo !== "compra" || o.status !== "aberta") return;
+    /* ja gravada na aba OC's: a leitura da planilha ja traz essa chegada — nao conta duas vezes */
+    if (AO_VIVO && o.planilha && o.planilha.ok) return;
     (o.itens||[]).forEach(it=>{
       const falta = (it.qtd||0) - (it.recebido||0);
       if (!(falta > 0)) return;
@@ -1804,8 +1806,15 @@ function aplicarOrdens(){
   });
   const resOP = reservaDeOP();
   DATA.skus.forEach(s=>{
-    const a = porSku[s.codigo], b = CHEG_BASE[s.codigo] || {};
-    if (a){ s.chegada_data = a.d; s.chegada_qtd = a.q; s.chegada_forn = a.f; s.cheg_real = true; }
+    let a = porSku[s.codigo]; const b = CHEG_BASE[s.codigo] || {};
+    /* com dado ao vivo, a ordem da torre SOMA com as OCs da planilha em vez de esconde-las:
+       vale a proxima chegada (a data mais cedo); na mesma data, as quantidades somam */
+    if (a && AO_VIVO && b.d && b.q){
+      if (String(b.d) < String(a.d)) a = {d:b.d, q:b.q, f:b.f};
+      else if (String(b.d) === String(a.d)) a = {d:a.d, q:a.q + b.q, f:a.f};
+    }
+    if (!a && AO_VIVO && b.d){ s.chegada_data = b.d; s.chegada_qtd = b.q; s.chegada_forn = b.f; s.cheg_real = true; }
+    else if (a){ s.chegada_data = a.d; s.chegada_qtd = a.q; s.chegada_forn = a.f; s.cheg_real = true; }
     else if (IGNORA_SIM){ s.chegada_data = null; s.chegada_qtd = null; s.chegada_forn = null; s.cheg_real = false; }
     else { s.chegada_data = b.d; s.chegada_qtd = b.q; s.chegada_forn = b.f; s.cheg_real = false; }
     /* duas reservas diferentes, guardadas separadas: a do Tiny e a das OPs */
