@@ -847,6 +847,12 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
 .oadd .tainput{width:100%;text-align:left}
 .ordform .btn:disabled{opacity:.5;cursor:not-allowed}
 .ocampo input.mud{border-color:var(--accent);background:var(--accent-soft)}
+.sdb{position:fixed;right:16px;bottom:16px;z-index:60;max-width:360px;padding:9px 13px;border-radius:9px;
+  font-size:12.2px;line-height:1.45;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);
+  box-shadow:0 6px 18px rgba(0,0,0,.12)}
+.sdb.ok{border-color:var(--green-line);background:var(--green-soft);color:var(--green)}
+.sdb.erro{border-color:var(--red-line);background:var(--red-soft);color:var(--red)}
+.sdb[hidden]{display:none}
 .rot-loc{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);margin:20px 0 8px}
 @media (max-width:700px){
   .olin{grid-template-columns:1fr 1fr 30px}
@@ -1413,7 +1419,7 @@ const TOM = {vermelho:"var(--red)", amarelo:"var(--amber)", verde:"var(--green)"
    registro compartilhado -- é a conversa de onde os dados moram. */
 const REG = (() => { try { return JSON.parse(localStorage.getItem("torre_reg") || "{}"); }
                      catch(e){ return {}; } })();
-function salvarReg(){ try { localStorage.setItem("torre_reg", JSON.stringify(REG)); } catch(e){} }
+function salvarReg(){ try { localStorage.setItem("torre_reg", JSON.stringify(REG)); } catch(e){} sincronizarReg(); }
 function reg(cod){ return REG[cod] || (REG[cod] = {resposta:null, quem:null, quando:null, rupturas:[], notas:[]}); }
 function temReg(cod){ return REG[cod]; }
 let USUARIO = "";
@@ -1626,6 +1632,143 @@ function apagarMarcDb(id){ if (DB) DB.doc("marcadores/" + id).delete().catch(()=
    O id do documento é o SKU higienizado; o SKU de verdade vai dentro do corpo. */
 let DB = null;
 const idDoc = sku => String(sku).replace(/[^A-Za-z0-9_\-.~:@+]/g, "_");
+/* ---------- banco compartilhado na planilha de BI: aba "Cão", tabela TabelaCao ----------
+   Fichas técnicas, marcadores, ordens de produção e os registros de cada SKU (resposta,
+   rupturas anotadas, notas, leadtime editado) moravam só no navegador de quem mexeu.
+   Agora moram numa aba da planilha de BI: uma linha por registro (Coleção, ID, Dados em
+   JSON, quando e quem). Quem salvar, salva para todo mundo; quem abrir, vê o que está lá.
+   Imita a interface do banco que a página já usava (collection/doc/get/set/delete/
+   onSnapshot), então o resto do código não precisou mudar. Apagar não remove a linha:
+   ela fica com Dados vazio, e a leitura ignora. */
+const ABA_CAO = "Cão", TABELA_CAO = "TabelaCao";
+const CAB_CAO = ["Coleção","ID","Dados","Atualizado em","Por"];
+function criarDbPlanilha(){
+  let cache = null;                 /* {linhas:[{col,id,dados,b}], lin0, col0} */
+  const pend = new Map();           /* "col\u0001id" -> {col,id,obj} ainda não gravado */
+  const ouvintes = {};
+  let timer = null, fila = Promise.resolve();
+  const urlAba = () => _wbUrl() + "/worksheets('" + encodeURIComponent(ABA_CAO) + "')";
+
+  async function tabela(token){
+    const url = _wbUrl() + "/tables/" + TABELA_CAO + "/range?$select=address,values";
+    try { return await graphJson(url, token); }
+    catch(e){
+      if (!/HTTP 404|ItemNotFound/i.test(String(e.message))) throw e;
+      /* primeira vez: cria a aba e a tabela */
+      try { await graphJson(_wbUrl() + "/worksheets/add", token, "POST", { name: ABA_CAO }); }
+      catch(e2){ if (!/HTTP 409|exist/i.test(String(e2.message))) throw e2; }
+      await graphJson(urlAba() + "/range(address='A1:E1')", token, "PATCH", { values: [CAB_CAO] });
+      const t = await graphJson(urlAba() + "/tables/add", token, "POST", { address: "A1:E1", hasHeaders: true });
+      await graphJson(_wbUrl() + "/tables/" + encodeURIComponent(t.id), token, "PATCH", { name: TABELA_CAO });
+      return await graphJson(url, token);
+    }
+  }
+  /* leituras ao mesmo tempo viram uma só — e a aba nunca é criada duas vezes */
+  let lendo = null;
+  function ler(){ return lendo || (lendo = lerAgora().finally(()=>{ lendo = null; })); }
+  async function lerAgora(){
+    const token = await getGraphToken();
+    if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+    const r = await tabela(token);
+    const m = /^\$?([A-Z]+)\$?(\d+)/.exec(String(r.address || "").split("!").pop());
+    const linhas = [];
+    (r.values || []).slice(1).forEach((v, b)=>{
+      const col = String(v[0] ?? "").trim(), id = String(v[1] ?? "").trim();
+      if (!col || !id) return;
+      let dados = null; const txt = String(v[2] ?? "");
+      if (txt){ try { dados = JSON.parse(txt); } catch(e){ dados = null; } }
+      linhas.push({col, id, dados, b});
+    });
+    cache = {linhas, lin0: m ? +m[2] : 1, col0: m ? _colNum(m[1]) : 0, token};
+    return cache;
+  }
+  /* o que o banco tem, com o que ainda está para gravar por cima */
+  function snap(nome){
+    const vale = {};
+    (cache ? cache.linhas : []).forEach(l=>{ if (l.col === nome && l.dados) vale[l.id] = l.dados; });
+    pend.forEach(p=>{ if (p.col !== nome) return; if (p.obj) vale[p.id] = p.obj; else delete vale[p.id]; });
+    return { docs: Object.keys(vale).map(id => ({ id, data: () => vale[id] })) };
+  }
+  function avisa(){ Object.keys(ouvintes).forEach(n => ouvintes[n].forEach(o=>{ try { o.cb(snap(n)); } catch(e){} })); }
+  function agenda(col, id, obj){
+    pend.set(col + "\u0001" + id, {col, id, obj: obj ? JSON.parse(JSON.stringify(obj)) : null});
+    clearTimeout(timer); timer = setTimeout(()=>{ fila = fila.then(descarrega, descarrega); }, 700);
+    statusDb("salvando");
+    return Promise.resolve();
+  }
+  async function descarrega(){
+    if (!pend.size) return;
+    const lote = [...pend.values()]; pend.clear();
+    try {
+      const c = await ler(), token = c.token;
+      const quando = new Date().toLocaleString("pt-BR"), por = USUARIO || "";
+      const novas = [];
+      for (const p of lote){
+        const txt = p.obj ? JSON.stringify(p.obj) : "";
+        if (txt.length > 32000) throw new Error("registro grande demais para uma célula (" + p.col + "/" + p.id + ")");
+        const ex = c.linhas.find(l => l.col === p.col && l.id === p.id);
+        if (ex){
+          const lin = c.lin0 + 1 + ex.b;
+          await graphJson(urlAba() + "/range(address='" + _colLetra(c.col0 + 2) + lin + ":" + _colLetra(c.col0 + 4) + lin + "')",
+                          token, "PATCH", { values: [[txt, quando, por]] });
+          ex.dados = p.obj;
+        } else if (p.obj){
+          novas.push([p.col, p.id, txt, quando, por]);
+        }
+      }
+      if (novas.length){
+        await graphJson(_wbUrl() + "/tables/" + TABELA_CAO + "/rows/add", token, "POST", { index: null, values: novas });
+        await ler();
+      }
+      statusDb(pend.size ? "salvando" : "ok");
+    } catch(e){
+      /* não perde: volta para a fila (sem passar por cima do que foi mexido depois) e tenta de novo */
+      lote.forEach(p=>{ const k = p.col + "\u0001" + p.id; if (!pend.has(k)) pend.set(k, p); });
+      statusDb("erro", String(e.message || e));
+      clearTimeout(timer); timer = setTimeout(()=>{ fila = fila.then(descarrega, descarrega); }, 30000);
+    }
+  }
+  const api = {
+    planilha: true,
+    collection(nome){ return {
+      async get(){ if (!cache) await ler(); return snap(nome); },
+      doc(id){ return api.doc(nome + "/" + id); },
+      onSnapshot(cb, err){ (ouvintes[nome] || (ouvintes[nome] = [])).push({cb, err}); if (cache) cb(snap(nome)); return ()=>{}; }
+    }; },
+    doc(caminho){
+      const i = caminho.indexOf("/"), col = caminho.slice(0, i), id = caminho.slice(i + 1);
+      return { set: obj => agenda(col, id, obj), delete: () => agenda(col, id, null) };
+    },
+    /* relê a aba e manda para a tela o que os outros salvaram */
+    async atualizar(){ await ler(); avisa(); },
+    pendentes: () => pend.size,
+  };
+  window.addEventListener("beforeunload", e=>{ if (pend.size){ e.preventDefault(); e.returnValue = ""; } });
+  return api;
+}
+/* aviso discreto de gravação no canto da tela */
+function statusDb(st, msg){
+  let el = document.getElementById("status-db");
+  if (!el){ el = document.createElement("div"); el.id = "status-db"; document.body.appendChild(el); }
+  clearTimeout(statusDb.t);
+  el.className = "sdb " + st;
+  el.innerHTML = st === "salvando" ? "Salvando na planilha…"
+    : st === "ok" ? "Salvo na planilha — todos já veem"
+    : "<b>Não consegui salvar na planilha.</b> " + esc(msg || "") + " Tento de novo em 30 s; não feche a página.";
+  el.hidden = false;
+  if (st === "ok") statusDb.t = setTimeout(()=>{ el.hidden = true; }, 2500);
+}
+/* registros por SKU (resposta, rupturas, notas, leadtime): sobe o que mudou desde a última vez */
+let REG_SYNC = {};
+function sincronizarReg(){
+  if (!DB) return;
+  Object.keys(REG).forEach(cod=>{
+    const j = JSON.stringify(REG[cod]);
+    if (REG_SYNC[cod] === j) return;
+    REG_SYNC[cod] = j;
+    DB.doc("registros/" + idDoc(cod)).set(Object.assign({sku: cod}, REG[cod]));
+  });
+}
 function corpoFicha(cod){ return Object.assign({sku:cod}, FICHAS[cod]); }
 function gravarFicha(cod){
   salvarFichas();
@@ -1642,9 +1785,12 @@ function apagarFicha(cod){
   DB.doc("fichas/" + idDoc(cod)).delete().catch(()=>{});
 }
 async function ligarDb(){
-  if (!window.claude || typeof window.claude.use !== "function") return;
-  try { DB = await window.claude.use("db"); } catch(e){ DB = null; }
-  if (!DB) return;
+  if (DB) return;
+  if (window.claude && typeof window.claude.use === "function"){
+    try { DB = await window.claude.use("db"); } catch(e){ DB = null; }
+  }
+  /* fora do artefato, o banco é a aba "Cão" da planilha de BI — precisa do login da Microsoft */
+  if (!DB){ if (!account) return; DB = criarDbPlanilha(); }
   const col = DB.collection("fichas");
   try {
     /* o que este navegador já tinha e o banco ainda não tem, sobe — nada se perde */
@@ -1679,6 +1825,28 @@ async function ligarDb(){
       try { await colO.doc(id).set(ORDENS[id]); } catch(e){}
     }
   } catch(e){}
+  /* registros de cada SKU: resposta, rupturas anotadas, notas e leadtime editado */
+  const colR = DB.collection("registros");
+  try {
+    const snapR = await colR.get();
+    const temR = {};
+    snapR.docs.forEach(d=>{ const b = d.data(); if (b) temR[b.sku || d.id] = 1; });
+    for (const cod of Object.keys(REG)){
+      if (temR[cod]) continue;
+      REG_SYNC[cod] = JSON.stringify(REG[cod]);
+      try { await colR.doc(idDoc(cod)).set(Object.assign({sku:cod}, REG[cod])); } catch(e){}
+    }
+  } catch(e){}
+  colR.onSnapshot(qs=>{
+    const vindo = {};
+    qs.docs.forEach(d=>{ const b = d.data(); if (!b) return;
+      const cod = b.sku || d.id, x = Object.assign({}, b); delete x.sku; vindo[cod] = x; });
+    Object.keys(REG).forEach(k=> delete REG[k]);
+    Object.assign(REG, vindo);
+    REG_SYNC = {}; Object.keys(REG).forEach(k=>{ REG_SYNC[k] = JSON.stringify(REG[k]); });
+    try { localStorage.setItem("torre_reg", JSON.stringify(REG)); } catch(e){}
+    explodir(); render();
+  }, ()=>{});
   colO.onSnapshot(qs=>{
     const vindo = {};
     qs.docs.forEach(d=>{ const b = d.data(); if (!b) return; vindo[b.id || d.id] = b; });
@@ -4444,963 +4612,4 @@ function editorFicha(P){
 
 function renderFichas(){
   const el = document.getElementById("painel-fichas");
-  if (state.aba !== "mp"){ el.hidden = true; return; }
-  el.hidden = false;
-  el.open = !!state.fichasAberto;
-
-  const paisComFicha = Object.keys(FICHAS).filter(c=>PORCOD[c]).map(c=>PORCOD[c]);
-  const completas = paisComFicha.filter(P=>estadoFicha(P.codigo)==="completa").length;
-  const pendentes = paisComFicha.filter(P=>estadoFicha(P.codigo)!=="completa");
-  if (!pendentes.length) state.homologando = false;
-  /* na fila, quem vende mais vem primeiro: erro de quantidade custa na proporcao do giro */
-  const ord = (state.homologando ? pendentes : paisComFicha).slice()
-    .sort((a,b)=>(b.venda_diaria||0)-(a.venda_diaria||0));
-  if (state.homologando && !ord.some(P=>P.codigo===state.fichaAberta))
-    state.fichaAberta = ord.length ? ord[0].codigo : null;
-
-  const linhas = ord.map(P=>{
-    const est = estadoFicha(P.codigo);
-    const f = FICHAS[P.codigo];
-    const n = (f.itens||[]).length;
-    const on = state.fichaAberta === P.codigo;
-    return '<div class="fl'+(on?" on":"")+'">'+
-      '<button class="flh" data-abrir="'+esc(P.codigo)+'" aria-expanded="'+(on?"true":"false")+'">'+
-        '<span class="fln"><b>'+esc(titulo(P.nome))+'</b>'+
-          '<span><span class="mono">'+esc(P.codigo)+'</span> · classe '+esc(P.classe)+'</span></span>'+
-        '<span class="flv">'+(P.venda_diaria>0 ? P.venda_diaria.toFixed(1)+'/dia' : 'sem giro')+'</span>'+
-        '<span class="selos"><span class="selo '+SELO[est][0]+'">'+SELO[est][1]+'</span>'+
-          (f.revisar ? '<span class="selo s-rev">revisar</span>' : '')+'</span>'+
-        '<span class="flc">'+(n ? n+' comp.' : '–')+'</span>'+
-        icon("chevron",15).replace('class="ic"','class="ic ch"')+
-      '</button>'+
-      (on ? editorFicha(P) : '')+
-    '</div>';
-  }).join("") || '<p class="dim" style="padding:14px 0;font-size:12.4px">'+
-    'Nenhuma ficha cadastrada ainda. Comece escolhendo o produto acima.</p>';
-
-  el.innerHTML =
-    '<summary>'+icon("kit",15)+'Fichas técnicas'+
-      '<span class="fprog"><b>'+paisComFicha.length+'</b> cadastrada'+(paisComFicha.length===1?'':'s')+
-      (paisComFicha.length ? ' · '+completas+' completa'+(completas===1?'':'s') : '')+'</span>'+
-      icon("chevron",15).replace('class="ic"','class="ic ch"')+
-    '</summary>'+
-    '<div class="fichasbody">'+
-      '<p class="fichasnota">Ficha é de <b>produto acabado específico</b> — não é porque é acabado que tem ficha, '+
-      'e kit classe K fica de fora: kit é agrupamento comercial, sai em nota pelos componentes e a demanda deles já aparece sozinha na venda. '+
-      'A ficha é <b>decidida aqui</b> — é aqui que estão a venda, o leadtime e o cálculo. O Tiny também guarda a estrutura, na aba produção, '+
-      'mas quem manda é esta tela: o que sai daqui para o ERP é a <b>ordem de produção</b> e a <b>ordem de compra</b>. '+
-      '<b>Completa</b> é a que você conferiu inteira; <b>conferida</b> é selo que só uma OP dá.'+
-      '<span id="fonte-fichas"></span></p>'+
-      (paisComFicha.length ? '<div class="fhom">'+
-        '<span><span class="tit">Homologação</span><br>'+
-        '<span class="sub">'+completas+' de '+paisComFicha.length+' conferidas'+
-        (pendentes.length ? ' · '+pendentes.length+' na fila' : ' · fila zerada')+'</span></span>'+
-        '<span class="barra"><i style="width:'+
-          Math.round(100*completas/Math.max(1,paisComFicha.length))+'%"></i></span>'+
-        (pendentes.length ? '<button class="btn '+(state.homologando?'':'btn-primary')+'" data-fila="1">'+
-          (state.homologando ? 'Sair da fila' : 'Entrar na fila')+'</button>' : '')+
-      '</div>' : '')+
-      (state.homologando ? '' :
-        '<div class="fcriar"><div class="rot">Criar ficha para um produto</div><div id="busca-criar"></div></div>')+
-      '<div class="fllista">'+linhas+'</div>'+
-    '</div>';
-
-  el.ontoggle = ()=>{ state.fichasAberto = el.open; };
-  ligarFichas(el);
-}
-
-function ligarFichas(raiz){
-  const criar = raiz.querySelector("#busca-criar");
-  if (criar) montaBusca(criar, {
-    placeholder: "Digite o nome ou o SKU do produto montado…",
-    itens: ()=> baseProdutos().filter(x=>!FICHAS[x.codigo]).map(itemBusca),
-    aoEscolher: cod=>{
-      FICHAS[cod] = {itens:[], estado:"rascunho", por:USUARIO, em:HOJE_ISO, revisar:false};
-      state.fichaAberta = cod; state.fichasAberto = true;
-      gravarFicha(cod); explodir(); render();
-    }
-  });
-  raiz.querySelectorAll("[data-busca]").forEach(host=>{
-    const pai = host.dataset.busca;
-    montaBusca(host, {
-      placeholder: "Digite o nome ou o SKU do componente…",
-      itens: ()=> DATA.skus.filter(x => !podeEntrar(pai, x.codigo)).map(itemBusca),
-      aoEscolher: comp=>{
-        const qi = raiz.querySelector('[data-qnovo="'+CSS.escape(pai)+'"]');
-        const q = Math.floor(Number(qi ? qi.value : 1));
-        const tr = document.getElementById("trava-"+pai);
-        const erro = podeEntrar(pai, comp) || (q > 0 ? null :
-          "A quantidade tem que ser um número inteiro maior que zero.");
-        if (erro){ if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>"+esc(erro)+"</span>"; } return; }
-        if (!FICHAS[pai]) FICHAS[pai] = {itens:[], estado:"rascunho", por:USUARIO, em:HOJE_ISO, revisar:false};
-        FICHAS[pai].itens.push({c:comp, q:q});
-        mexeu(pai, true);
-      }
-    });
-  });
-  raiz.querySelectorAll("[data-fila]").forEach(b=>{
-    b.onclick = ()=>{ state.homologando = !state.homologando;
-      state.fichasAberto = true; if (state.homologando) state.fichaAberta = null; renderFichas(); };
-  });
-  raiz.querySelectorAll("[data-homologa]").forEach(b=>{
-    b.onclick = ()=>{
-      const cod = b.dataset.homologa;
-      const f = FICHAS[cod]; if (!f) return;
-      /* conferida de verdade: sai o selo de rascunho e some a ressalva da carga */
-      f.estado = "completa"; f.revisar = false; delete f.origem;
-      /* proxima da fila antes de redesenhar, para nao cair na ficha que acabou de sair */
-      const fila = Object.keys(FICHAS).filter(c=>PORCOD[c] && c!==cod && estadoFicha(c)!=="completa")
-        .map(c=>PORCOD[c]).sort((a,b)=>(b.venda_diaria||0)-(a.venda_diaria||0));
-      state.fichaAberta = fila.length ? fila[0].codigo : null;
-      mexeu(cod, false);
-    };
-  });
-  raiz.querySelectorAll("[data-abrir]").forEach(b=>{
-    b.onclick = ()=>{ const c = b.dataset.abrir;
-      state.fichaAberta = (state.fichaAberta === c) ? null : c; state.fichasAberto = true; renderFichas(); };
-  });
-  raiz.querySelectorAll("[data-del]").forEach(b=>{
-    b.onclick = ()=>{ const a = b.dataset.del.split("|");
-      FICHAS[a[0]].itens.splice(+a[1],1); mexeu(a[0], false); };
-  });
-  raiz.querySelectorAll("[data-q]").forEach(inp=>{
-    inp.onchange = ()=>{
-      const a = inp.dataset.q.split("|"), pai = a[0], i = +a[1];
-      const v = Math.floor(Number(inp.value));
-      const tr = document.getElementById("trava-"+pai);
-      if (!(v > 0)){
-        if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>A quantidade tem que ser um número inteiro maior que zero. Em branco não vale — ficha sem quantidade erra o montável em silêncio.</span>"; }
-        inp.value = FICHAS[pai].itens[i].q; return;
-      }
-      FICHAS[pai].itens[i].q = v; mexeu(pai, true);
-    };
-  });
-  raiz.querySelectorAll("[data-estado]").forEach(b=>{
-    b.onclick = ()=>{ const a = b.dataset.estado.split("|");
-      FICHAS[a[0]].estado = a[1]; if (a[1] === "completa") FICHAS[a[0]].revisar = false; mexeu(a[0], false); };
-  });
-  raiz.querySelectorAll("[data-apaga]").forEach(b=>{
-    b.onclick = ()=>{
-      const cod = b.dataset.apaga;
-      if (b.dataset.certo !== "1"){ b.dataset.certo = "1"; b.textContent = "Apagar mesmo?"; return; }
-      delete FICHAS[cod]; state.fichaAberta = null;
-      apagarFicha(cod); salvarFichas(); explodir(); render();
-    };
-  });
-  const fonte = raiz.querySelector("#fonte-fichas");
-  if (fonte) fonte.innerHTML = DB
-    ? ' <b>Guardando no banco do artefato</b> — todo mundo que abre esta página vê as mesmas fichas.'
-    : ' <b>Guardando só neste navegador</b> — as fichas ainda não estão sendo compartilhadas.';
-}
-
-function render(){
-  renderAbas();
-  if (state.aba === "pedidos"){ renderPedidos(); renderBarra(); return; }
-  renderFichas(); renderFiltros(); renderKpis(); renderAcc(); renderRecado(); renderTabela();
-  renderBarra();
-}
-
-/* ============================================================
-   BARRA DE SELECAO
-   A selecao e explicita e atravessa filtro: quem marcou cinco importados e depois
-   foi ver as rupturas continua com os cinco. A barra avisa quantos sairam da tela.
-   Ela e tambem onde o conjunto se resume — os KPIs la em cima sao do recorte,
-   estes numeros aqui embaixo sao do que voce marcou.
-   ============================================================ */
-function abrirPopMarc(pop, sel){
-  const codigos = sel.map(x=>x.codigo);
-  const lista = Object.values(MARCS).sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));
-  pop.hidden = false;
-  pop.innerHTML =
-    '<h4>'+icon("nota",14)+'Marcar '+sel.length+' selecionado'+(sel.length===1?'':'s')+'</h4>'+
-    (lista.length
-      ? '<div class="mlista">'+lista.map(m=>{
-          const dentro = codigos.filter(c=>m.skus.includes(c)).length;
-          const todos = dentro === codigos.length;
-          return '<div class="mlinha">'+
-            '<span class="nm"><i style="background:'+m.cor+'"></i><span>'+esc(m.nome)+'</span></span>'+
-            '<span class="qt">'+m.skus.length+' SKUs'+
-              (dentro && !todos ? ' · '+dentro+' já dentro' : '')+'</span>'+
-            '<button class="btn" data-marc="'+esc(m.id)+'" data-tirar="'+(todos?"1":"0")+'">'+
-              (todos ? "Tirar" : "Marcar")+'</button></div>';
-        }).join("")+'</div>'
-      : '<p class="hoje">Nenhum marcador ainda. Crie o primeiro aqui embaixo.</p>')+
-    '<div class="mnovo"><div class="rot">Novo marcador</div>'+
-      '<div class="lin"><input type="text" id="m-nome" maxlength="34" placeholder="Curva A, Comprar em outubro…">'+
-        '<button class="btn btn-primary" id="m-criar">Criar e marcar</button></div>'+
-      '<div class="mcores" id="m-cores">'+CORES_MARC.map((c,i)=>
-        '<button data-cor="'+c+'" style="background:'+c+'" aria-pressed="'+(i===0?"true":"false")+
-        '" aria-label="cor '+(i+1)+'"></button>').join("")+'</div>'+
-    '</div>'+
-    '<div class="sbpe"><button class="btn" id="m-fechar">Fechar</button></div>';
-
-  pop.querySelectorAll("[data-marc]").forEach(b=>{
-    b.onclick = ()=>{
-      const m = MARCS[b.dataset.marc]; if (!m) return;
-      if (b.dataset.tirar === "1") m.skus = m.skus.filter(c=>!codigos.includes(c));
-      else codigos.forEach(c=>{ if (!m.skus.includes(c)) m.skus.push(c); });
-      m.por = USUARIO; m.em = HOJE_ISO;
-      gravarMarc(m.id);
-      const guarda = new Set(state.sel); render(); state.sel = guarda;
-      renderBarra(); abrirPopMarc(document.getElementById("sb-pop"), selecionados());
-    };
-  });
-  let cor = CORES_MARC[0];
-  pop.querySelectorAll("#m-cores button").forEach(b=>{
-    b.onclick = ()=>{ cor = b.dataset.cor;
-      pop.querySelectorAll("#m-cores button").forEach(o=>o.setAttribute("aria-pressed", o===b?"true":"false")); };
-  });
-  const criar = ()=>{
-    const nome = document.getElementById("m-nome").value.trim();
-    if (!nome) return;
-    let id = idMarc(nome), n = 2;
-    while (MARCS[id]) id = idMarc(nome) + "-" + (n++);
-    MARCS[id] = {id:id, nome:nome, cor:cor, skus:codigos.slice(), por:USUARIO, em:HOJE_ISO};
-    gravarMarc(id);
-    const guarda = new Set(state.sel); render(); state.sel = guarda;
-    renderBarra(); abrirPopMarc(document.getElementById("sb-pop"), selecionados());
-  };
-  document.getElementById("m-criar").onclick = criar;
-  document.getElementById("m-nome").onkeydown = e=>{ if (e.key === "Enter") criar(); };
-  document.getElementById("m-fechar").onclick = ()=>{ pop.hidden = true; };
-}
-
-let PISCAR = null;        /* codigos que acabaram de mudar, para o pisca-pisca */
-let DESFAZER = null;      /* {antes:{cod:valorAnterior}, n, dias} */
-let TIMER_DESFAZER = null;
-
-function selecionados(){
-  return DATA.skus.filter(x => state.sel.has(x.codigo));
-}
-/* leadtime de produto com ficha e derivado (componente mais lento + montagem):
-   ele nao pode receber valor digitado, nem individual nem em massa. */
-function aceitaLead(s){ return !s.lead_derivado; }
-
-/* como a linha ficaria se o leadtime fosse n — mesma escada do ef(), so que
-   com o numero da simulacao no lugar do que esta gravado */
-function comoFicaria(s0, n){
-  const b = (s0.alt3m && rupturasDe(s0).length) ? Object.assign({}, s0, s0.alt3m) : s0;
-  return Object.assign({}, b, comLead(b, n));
-}
-
-function renderBarra(){
-  const bar = document.getElementById("selbar");
-  if (!bar) return;
-  if (DESFAZER){ pintaDesfazer(bar); return; }
-  const sel = selecionados();
-  bar.hidden = sel.length === 0;
-  document.body.classList.toggle("combarra", sel.length > 0);
-  if (!sel.length){ bar.innerHTML = ""; document.body.style.removeProperty("--folga-barra"); return; }
-
-  const naTela = {}; visiveis(false).forEach(x=>naTela[x.codigo] = 1);
-  const fora = sel.filter(x=>!naTela[x.codigo]).length;
-  const comprar = sel.reduce((a,x)=>a + (ef(x).sugestao || 0), 0);
-  const rupturas = sel.filter(x=>x.em_ruptura).length;
-
-  bar.innerHTML =
-    '<div class="sbin">'+
-      '<div class="sbn"><b>'+sel.length+'</b><span>selecionado'+(sel.length===1?'':'s')+'</span></div>'+
-      '<button class="btn btn-primary" id="sb-lead">'+icon("ajustes",14)+'Ajustar leadtime</button>'+
-      '<button class="btn" id="sb-marc">'+icon("nota",14)+'Marcar como…</button>'+
-      '<button class="btn" id="sb-oc">'+icon("pedido",14)+'Lançar ordem de compra</button>'+
-      '<div class="sbdev"><span class="rot">para desenvolver</span>'+
-        '<button class="btn dev" disabled title="Vai nascer junto com a aba de Pedidos">Lançar ordem de produção</button>'+
-        '<button class="btn dev" disabled title="Exportação do recorte, ainda por construir">Exportar</button>'+
-      '</div>'+
-      '<button class="sblimpar" id="sb-limpar">Limpar seleção</button>'+
-      '<div class="sbtot">'+
-        '<div><b>'+sel.length+'</b><span>SKUs</span></div>'+
-        '<div><b>'+nf(comprar)+'</b><span>un. a comprar</span></div>'+
-        '<div'+(rupturas?' class="aten"':'')+'><b>'+rupturas+'</b><span>em ruptura</span></div>'+
-      '</div>'+
-      (fora ? '<div class="sbfora"><b>'+fora+'</b> fora do filtro atual — continuam marcados.</div>' : '')+
-    '</div>'+
-    '<div class="sbpop" id="sb-pop" hidden></div>';
-
-  document.getElementById("sb-limpar").onclick = ()=>{
-    state.sel.clear(); state.ultimoChk = null; render();
-  };
-  document.getElementById("sb-lead").onclick = ()=>{
-    const pop = document.getElementById("sb-pop");
-    if (!pop.hidden && pop.dataset.qual === "lead"){ pop.hidden = true; return; }
-    pop.dataset.qual = "lead"; abrirPopLead(pop, sel);
-  };
-  document.getElementById("sb-oc").onclick = ()=>{ abrirFormOC(); };
-  document.getElementById("sb-marc").onclick = ()=>{
-    const pop = document.getElementById("sb-pop");
-    if (!pop.hidden && pop.dataset.qual === "marc"){ pop.hidden = true; return; }
-    pop.dataset.qual = "marc"; abrirPopMarc(pop, sel);
-  };
-  folgaDaBarra(bar);
-}
-
-function folgaDaBarra(bar){
-  requestAnimationFrame(()=>{
-    document.body.style.setProperty("--folga-barra", (bar.offsetHeight + 18) + "px");
-  });
-}
-
-function abrirPopLead(pop, sel){
-  const podem = sel.filter(aceitaLead);
-  const derivados = sel.length - podem.length;
-  const proprios = podem.filter(x=>leadEditado(x.codigo));
-  const padrao = podem.length - proprios.length;
-  const valores = [...new Set(proprios.map(x=>leadDe(x.codigo)))].sort((a,b)=>a-b);
-
-  pop.hidden = false;
-  pop.innerHTML =
-    '<h4>'+icon("ajustes",14)+'Ajustar leadtime · '+sel.length+' selecionado'+(sel.length===1?'':'s')+'</h4>'+
-    '<p class="hoje">Hoje: <b>'+padrao+'</b> no padrão de '+DATA.leadtime+' d'+
-      (proprios.length ? ' · <b>'+proprios.length+'</b> com leadtime próprio ('+valores.join(' e ')+' d)' : '')+'</p>'+
-    '<div class="campo"><input type="number" id="sb-lead-in" min="1" max="365" step="1" value="'+
-      DATA.leadtime+'" aria-label="novo leadtime em dias"><span class="dim">dias corridos</span></div>'+
-    '<div class="sbprev" id="sb-prev"></div>'+
-    '<div class="sbpe"><button class="btn" id="sb-cancel">Cancelar</button>'+
-      '<button class="btn btn-primary" id="sb-ok">Confirmar</button></div>';
-
-  const inp = document.getElementById("sb-lead-in");
-  const desenha = ()=>{
-    const n = parseInt(inp.value, 10);
-    const prev = document.getElementById("sb-prev");
-    const ok = document.getElementById("sb-ok");
-    if (isNaN(n) || n < 1 || n > 365){
-      prev.innerHTML = '<div class="li fora"><span>Digite um número de 1 a 365.</span></div>';
-      ok.disabled = true; ok.textContent = "Confirmar"; return;
-    }
-    /* a previa recalcula a cada tecla: e ver a cor mudar antes que torna isto seguro */
-    const mudam = podem.filter(x=>leadDe(x.codigo) !== n);
-    let trocaCor = 0; const novasRupturas = [];
-    mudam.forEach(x=>{
-      const antes = estado(ef(x));
-      const dep = comoFicaria(x, n);
-      if (estado(dep) !== antes) trocaCor++;
-      const rupAntes = ef(x).pedir_ate ? diasAte(ef(x).pedir_ate) < 0 : false;
-      const rupDep = dep.pedir_ate ? diasAte(dep.pedir_ate) < 0 : false;
-      if (rupDep && !rupAntes) novasRupturas.push(x);
-    });
-    prev.innerHTML =
-      '<div class="li"><b>'+mudam.length+'</b><span>alteram</span></div>'+
-      (podem.length - mudam.length ? '<div class="li fora"><b>'+(podem.length-mudam.length)+
-        '</b><span>já estão em '+n+' d</span></div>' : '')+
-      (derivados ? '<div class="li fora"><b>'+derivados+'</b><span>têm ficha técnica — leadtime derivado, ficam de fora</span></div>' : '')+
-      (trocaCor ? '<div class="li cor"><b>'+trocaCor+'</b><span>mudam de cor</span></div>' : '')+
-      (novasRupturas.length ? '<div class="li rup"><b>'+novasRupturas.length+
-        '</b><span>passam a estar com o pedido vencido</span></div>'+
-        '<div class="quais">'+novasRupturas.slice(0,6).map(x=>
-          '<span class="mono">'+esc(x.codigo)+'</span> '+esc(titulo(x.nome))).join('<br>')+
-          (novasRupturas.length>6 ? '<br>e mais '+(novasRupturas.length-6)+'…' : '')+'</div>' : '');
-    ok.disabled = mudam.length === 0;
-    ok.textContent = mudam.length ? "Confirmar "+(mudam.length===1?"1":"as "+mudam.length) : "Nada a mudar";
-  };
-  inp.oninput = desenha; desenha(); inp.focus(); inp.select();
-
-  document.getElementById("sb-cancel").onclick = ()=>{ pop.hidden = true; };
-  document.getElementById("sb-ok").onclick = ()=>{
-    const n = parseInt(inp.value, 10);
-    if (isNaN(n) || n < 1 || n > 365) return;
-    const mudam = podem.filter(x=>leadDe(x.codigo) !== n);
-    if (!mudam.length) return;
-    const antes = {};
-    mudam.forEach(x=>{
-      const r = reg(x.codigo);
-      antes[x.codigo] = r.leadtime || null;      /* null = estava no padrão */
-      r.leadtime = n; r.quemLead = USUARIO; r.quandoLead = HOJE_ISO;
-    });
-    salvarReg();
-    PISCAR = mudam.map(x=>x.codigo);
-    state.sel.clear(); state.ultimoChk = null;
-    DESFAZER = {antes: antes, n: mudam.length, dias: n};
-    clearTimeout(TIMER_DESFAZER);
-    TIMER_DESFAZER = setTimeout(()=>{ DESFAZER = null; renderBarra(); }, 20000);
-    render();
-  };
-}
-
-function pintaDesfazer(bar){
-  bar.hidden = false;
-  document.body.classList.add("combarra");
-  bar.innerHTML =
-    '<div class="sbfeito"><span class="ok">✓</span>'+
-      '<span class="tx"><b>'+DESFAZER.n+'</b> leadtime'+(DESFAZER.n===1?'':'s')+
-      ' alterado'+(DESFAZER.n===1?'':'s')+' para <b>'+DESFAZER.dias+' dias</b>.</span>'+
-      '<button class="btn" id="sb-undo">Desfazer</button></div>';
-  folgaDaBarra(bar);
-  document.getElementById("sb-undo").onclick = ()=>{
-    Object.keys(DESFAZER.antes).forEach(cod=>{
-      const r = reg(cod);
-      r.leadtime = DESFAZER.antes[cod];
-      if (!r.leadtime){ r.quemLead = null; r.quandoLead = null; }
-    });
-    salvarReg();
-    clearTimeout(TIMER_DESFAZER); DESFAZER = null;
-    render();
-  };
-}
-
-/* ---------- tela de entrada ----------
-   A capa agora e a ilustracao, que traz o letreiro e as cores dentro dela: nao ha
-   mais o que repintar por tema. A unica coisa viva ali e a linha de texto, que le
-   o conteudo real da torre — quantas decisoes de compra esperam hoje. */
-function pintaCapa(){}
-function abrirCapa(){
-  const reais = DATA.skus.filter(s => s.real && (s.escopos||["acabado"]).includes("acabado"));
-  const acao = reais.filter(FILTROS_ST.acao).length;
-  document.getElementById("ent-ln").innerHTML =
-    "<b>" + acao + " decisões de compra</b> esperam por você na leitura de " + dbr(DATA.gerado_em) + ".";
-  pintaCapa();
-  document.getElementById("entrada").hidden = false;
-}
-document.getElementById("ent-btn").onclick = ()=>{ document.getElementById("entrada").hidden = true; };
-
-/* =========================================================================
-   DADO AO VIVO — login Microsoft (MSAL) + Kondado (via Worker) + OC do SharePoint
-   Mesma ligação da versão com login: o Worker devolve cadastro, saldo e venda
-   (NF emitida) do Tiny; a aba "OC's" da planilha de BI no SharePoint traz os
-   pedidos de compra. O resto da torre (fichas, ordens, marcadores) segue igual.
-   ========================================================================= */
-const MSAL_CONFIG = {
-  auth: {
-    clientId: "faac45db-51bb-412d-af51-b706e2127b91",
-    authority: "https://login.microsoftonline.com/3075413c-ecbd-4162-955b-660d6163d85b",
-    redirectUri: window.location.origin + window.location.pathname,
-  },
-  cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: false },
-};
-const GRAPH_SCOPES = ["Sites.ReadWrite.All"];
-const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
-const SITE_HOSTNAME = "holdbeautyimportacao.sharepoint.com";
-const SITE_PATH = "AREA_BI";
-/* planilha de BI (conteúdo do Portal - Compras): aba OC's, tabela Tabela1 */
-const DRIVE_ITEM_PATH = "BI_Dados/Base_de_Dados_-_Power_BI .xlsx";
-const SHEET_NAME = "OC's";
-const WORKER_URL = "https://torre-estoque-proxy.titecnologiadainformacaohold.workers.dev";
-let AO_VIVO = false;
-
-function _toNum(v, def=0){ if (v===null||v===undefined||v==="") return def; const n=parseFloat(v); return isNaN(n)?def:n; }
-function _toDate(v){
-  if (v===null||v===undefined||v==="") return null;
-  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
-  const s = String(v).trim(); let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return new Date(+m[1], +m[2]-1, +m[3]);
-  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m) return new Date(+m[3], +m[2]-1, +m[1]);
-  return null;
-}
-function _isoDate(d){ if (!d) return null;
-  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
-
-/* ---------- SharePoint (Microsoft Graph) ---------- */
-async function graphFetch(url, token){
-  const resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
-  if (!resp.ok){ const t = await resp.text().catch(()=> "");
-    throw new Error("SharePoint HTTP " + resp.status + ": " + t.slice(0,300)); }
-  return resp;
-}
-async function resolveSiteId(token){
-  const r = await graphFetch(GRAPH_BASE + "/sites/" + SITE_HOSTNAME + ":/sites/" + SITE_PATH, token);
-  return (await r.json()).id;
-}
-/* ---------- aba OC's: colunas, célula e impressão digital da linha ---------- */
-/* nomes reais da aba OC's primeiro; os antigos ficam como reserva */
-const OC_ALIAS = {
-  sku:          ["sku","codigo","codigo (sku)"],
-  numero:       ["oc / invoice","oc/invoice","oc","numero"],
-  fornecedor:   ["fornecedor"],
-  descricao:    ["descricao","produto_nome","produto"],
-  origem:       ["origem"],
-  leadtime:     ["leadtime"],
-  quantidade:   ["quantidade oc","quantidade"],
-  nf:           ["nf"],
-  quantidade_nf:["quantidade nf"],
-  data_prevista:["previsao/eta","previsao / eta","eta","data_prevista"],
-  data_coleta:  ["coleta/etd","coleta / etd","etd"],
-  data_pedido:  ["data","data_pedido"],
-  data_entrega: ["entrega","data_entrega"],
-  status:       ["status"],
-  obs:          ["observacoes","observacao","obs"],
-};
-/* cabeçalho normalizado: minúsculo, sem acento, espaços simples, sem os dois-pontos do fim */
-const _normCab = h => String(h||"").normalize("NFD").replace(/[̀-ͯ]/g,"")
-                   .toLowerCase().replace(/\s+/g," ").trim().replace(/\s*:+$/,"").trim();
-function _idxOC(cab){
-  const H = {}; (cab||[]).forEach((h,i)=>{ h = _normCab(h); if (h && H[h] === undefined) H[h] = i; });
-  const idx = {};
-  Object.entries(OC_ALIAS).forEach(([k, alts])=>{
-    const a = alts.find(x => H[_normCab(x)] !== undefined); idx[k] = a === undefined ? undefined : H[_normCab(a)]; });
-  return idx;
-}
-/* data da célula: serial do Excel (API do workbook) ou Date/texto (arquivo baixado) */
-function _isoCel(v){
-  if (typeof v === "number" && v > 20000 && v < 80000)
-    return _isoDate(new Date(Math.round((v - 25569) * 86400000) + 12*3600000));
-  const d = _toDate(v); return d ? _isoDate(d) : null;
-}
-/* impressão digital da linha: antes de gravar, a torre relê a tabela e confere se a
-   linha ainda é a mesma que estava na tela. Se alguém mexeu nela, não grava. */
-function _fpOC(r, idx){
-  const c = k => (!r || idx[k] === undefined) ? "" : r[idx[k]];
-  const t = v => String(v ?? "").trim().toUpperCase();
-  return [t(c("numero")), t(c("fornecedor")), t(c("descricao")), _toNum(c("quantidade")),
-          _toNum(c("quantidade_nf")), _isoCel(c("data_prevista")) || "", t(c("status"))].join("|");
-}
-const chaveOC = (numero, fornecedor) => String(numero ?? "").trim() + "|" + String(fornecedor ?? "").trim();
-function _colNum(letras){ let n = 0; for (const ch of letras) n = n*26 + (ch.charCodeAt(0) - 64); return n - 1; }
-function _colLetra(n){ let s = ""; n++; while (n > 0){ const m = (n-1) % 26; s = String.fromCharCode(65+m) + s; n = Math.floor((n-1)/26); } return s; }
-function _wbUrl(){
-  return GRAPH_BASE + "/sites/" + siteIdCache + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/workbook";
-}
-/* a Tabela1 inteira pela API do workbook — enxerga na hora o que acabou de ser gravado.
-   lin0/col0: onde a tabela começa na aba (linha do cabeçalho e primeira coluna). */
-async function lerTabelaOC(token){
-  const r = await graphJson(_wbUrl() + "/tables/" + TABELA_OC + "/range?$select=address,values", token);
-  const fim = String(r.address || "").split("!").pop();
-  const m = /^\$?([A-Z]+)\$?(\d+)/.exec(fim);
-  return { valores: r.values || [], col0: m ? _colNum(m[1]) : 0, lin0: m ? +m[2] : 1 };
-}
-async function ocListOpen(token, siteId){
-  if (!siteIdCache) siteIdCache = siteId;
-  let rows;
-  try { rows = (await lerTabelaOC(token)).valores; }
-  catch(e){
-    /* reserva: baixa o arquivo inteiro e lê a aba com o SheetJS */
-    const url = GRAPH_BASE + "/sites/" + siteId + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/content";
-    const buf = await (await graphFetch(url, token)).arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array", cellDates: true });
-    if (!wb.SheetNames.includes(SHEET_NAME))
-      throw new Error("Aba '" + SHEET_NAME + "' não encontrada. Abas: " + wb.SheetNames.join(", "));
-    rows = XLSX.utils.sheet_to_json(wb.Sheets[SHEET_NAME], { header: 1, defval: null, blankrows: true });
-  }
-  const idx = _idxOC(rows[0]);
-  if (idx.sku === undefined || idx.quantidade === undefined || idx.data_prevista === undefined)
-    throw new Error("Aba '" + SHEET_NAME + "': não achei as colunas SKU, Quantidade OC e Previsão/ETA. Cabeçalho lido: " +
-                    (rows[0]||[]).filter(Boolean).join(" · "));
-  const col = (r, k) => idx[k] === undefined ? null : (r[idx[k]] ?? null);
-  const iso = _isoCel;
-  const FECHADA = /entreg|receb|finaliz|conclu|cancel/i;
-  const out = [], semSku = [], todas = [];
-  for (let i = 1; i < rows.length; i++){
-    const r = rows[i];
-    if (!r || r.every(v => v === null || v === "")) continue;
-    const sku = col(r,"sku");
-    const skuTxt = sku === null ? "" : String(sku).trim();
-    /* SKU vem de um PROCX na planilha: 0 ou #N/D = descrição que não achou na aba Produtos */
-    const temSku = !(!skuTxt || skuTxt === "0" || /^#/.test(skuTxt));
-    const qOC = _toNum(col(r,"quantidade")), qNF = _toNum(col(r,"quantidade_nf"));
-    const entrega = iso(col(r,"data_entrega"));
-    const stTxt = String(col(r,"status") || "").trim();
-    const fechada = FECHADA.test(stTxt) || (!!entrega && !(qNF > 0 && qNF < qOC));
-    const numero = col(r,"numero") !== null ? String(col(r,"numero")).trim() : null;
-    const fornecedor = col(r,"fornecedor");
-    const key = chaveOC(numero, fornecedor);
-    /* toda linha da aba, com ou sem SKU: é a lista que a aba Pedidos mostra e edita.
-       b = posição da linha no corpo da Tabela1 (0 = logo abaixo do cabeçalho) */
-    todas.push({ b: i - 1, fp: _fpOC(r, idx), key, numero,
-      fornecedor: fornecedor === null ? "" : String(fornecedor).trim(),
-      descricao: String(col(r,"descricao") || "").trim(), sku: temSku ? skuTxt : null,
-      qOC, qNF, nf: col(r,"nf"), obs: col(r,"obs"),
-      data_pedido: iso(col(r,"data_pedido")), data_prevista: iso(col(r,"data_prevista")), data_entrega: entrega,
-      status_planilha: stTxt, fechada, cancelada: /cancel/i.test(stTxt),
-      falta: fechada ? 0 : Math.max(0, qOC - (qNF > 0 ? qNF : 0)) });
-    if (!temSku){
-      if (col(r,"descricao") || col(r,"quantidade")) semSku.push({
-        oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: stTxt});
-      continue;
-    }
-    out.push({
-      sku: skuTxt,
-      numero,
-      key,
-      linha: i - 1,
-      produto_nome: col(r,"descricao"),
-      fornecedor: fornecedor,
-      /* entrega parcial: o que falta chegar é a OC menos o que já veio na NF */
-      quantidade: fechada ? qOC : Math.max(0, qOC - (qNF > 0 ? qNF : 0)),
-      quantidade_oc: qOC, quantidade_nf: qNF || null, nf: col(r,"nf"),
-      data_prevista: iso(col(r,"data_prevista")),
-      data_coleta: iso(col(r,"data_coleta")),
-      data_pedido: iso(col(r,"data_pedido")),
-      data_entrega: entrega,
-      origem: col(r,"origem"),
-      leadtime: col(r,"leadtime"),
-      status: fechada ? (/cancel/i.test(stTxt) ? "Cancelado" : "Entregue") : "Pendente",
-      status_planilha: stTxt || null,
-    });
-  }
-  out.semSku = semSku; out.todas = todas;
-  return out;
-}
-/* ---------- escreve a OC na planilha de BI (aba OC's, tabela Tabela1) ----------
-   Uma linha por item. Origem, SKU, Leadtime, atraso e Leadtime real ficam com as
-   formulas da propria tabela; a Previsao/ETA vai com a data digitada na torre.
-   A Descricao precisa ser a da aba Produtos, senao o PROCX do SKU devolve 0. */
-const TABELA_OC = "Tabela1";
-function _serialExcel(iso){
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ""); if (!m) return "";
-  return (Date.UTC(+m[1], +m[2]-1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000;
-}
-async function graphJson(url, token, method, body){
-  const resp = await fetch(url, { method: method || "GET",
-    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined });
-  if (!resp.ok){ const t = await resp.text().catch(()=> "");
-    throw new Error("SharePoint HTTP " + resp.status + ": " + t.slice(0,300)); }
-  return resp.status === 204 ? null : resp.json();
-}
-async function escreverOCPlanilha(o){
-  if (!account || !msalInstance) throw new Error("sem login da Microsoft");
-  const token = await getGraphToken();
-  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
-  const wb = GRAPH_BASE + "/sites/" + siteIdCache + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/workbook";
-  /* SKU -> descricao exata da aba Produtos */
-  const prod = await graphJson(wb + "/worksheets('Produtos')/usedRange(valuesOnly=true)?$select=values", token);
-  const desc = {};
-  (prod.values || []).slice(1).forEach(r=>{ const k = String(r[2]||"").trim().toUpperCase(); if (k && !desc[k]) desc[k] = String(r[1]||"").trim(); });
-  const semCadastro = [];
-  const obs = [o.obs, "Lançada pela Torre" + (USUARIO ? " por " + USUARIO : "") + (o.numero_tiny ? " · Tiny " + o.numero_tiny : "")]
-                .filter(Boolean).join(" · ");
-  const linhas = (o.itens||[]).map(it=>{
-    const d = desc[String(it.c).trim().toUpperCase()];
-    const P = PORCOD[it.c];
-    if (!d) semCadastro.push(it.c);
-    const L = new Array(30).fill("");
-    L[0]  = _serialExcel(o.data_pedido || HOJE_ISO);                 /* Data */
-    L[1]  = o.numero || "";                                          /* OC / Invoice */
-    L[2]  = o.fornecedor || "";                                      /* Fornecedor */
-    L[3]  = d || (P ? String(P.nome).toUpperCase() : it.c);          /* Descricao */
-    L[4]  = "=XLOOKUP([@[Fornecedor:]],Listas!A:A,Listas!B:B,0)";    /* Origem */
-    L[5]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!C:C,0)"; /* SKU */
-    L[6]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!E:E,0)"; /* Leadtime */
-    L[7]  = it.qtd || 0;                                             /* Quantidade OC */
-    if (it.recebido) L[9] = it.recebido;                             /* Quantidade NF: o que ja veio */
-    L[10] = _serialExcel(it.prevista || o.data_prevista);            /* Previsao/ETA */
-    L[13] = "=[@[Entrega:]]-[@[Previsão/ETA:]]";                     /* atraso */
-    L[14] = '=IF([@[Status:]]="Entregue",[@[Entrega:]]-[@[Data:]],0)'; /* Leadtime real */
-    L[15] = "Pendente";                                              /* Status */
-    L[28] = obs;                                                     /* Observacoes */
-    return L;
-  });
-  if (!linhas.length) return { semCadastro };
-  await graphJson(wb + "/tables/" + TABELA_OC + "/rows/add", token, "POST", { index: null, values: linhas });
-  return { semCadastro };
-}
-/* ---------- grava em linhas que já existem na aba OC's ----------
-   mudancas: [{b, fp, rot, campos:{quantidade, data_prevista, status, data_entrega, nf, quantidade_nf}}]
-   Primeiro acha TODAS as linhas (pela posição e, se a posição não bate, pela impressão
-   digital); só depois grava. Grava célula a célula, então as fórmulas das outras colunas
-   (Origem, SKU, Leadtime, atraso, Leadtime real) ficam intactas. */
-async function gravarNaPlanilhaOC(mudancas){
-  if (!account || !msalInstance) throw new Error("sem login da Microsoft — entre de novo e tente outra vez");
-  const token = await getGraphToken();
-  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
-  const t = await lerTabelaOC(token);
-  const corpo = t.valores.slice(1), idx = _idxOC(t.valores[0]);
-  const plano = [];
-  for (const m of mudancas){
-    let b = m.b;
-    if (_fpOC(corpo[b], idx) !== m.fp){
-      const achou = [];
-      corpo.forEach((r, j)=>{ if (_fpOC(r, idx) === m.fp) achou.push(j); });
-      if (achou.length !== 1) throw new Error("a linha de " + m.rot + " mudou na planilha depois da última leitura " +
-        "(alguém editou, apagou ou reordenou). Nada foi gravado: clique em Atualizar e refaça a alteração.");
-      b = achou[0];
-    }
-    const lin = t.lin0 + 1 + b;
-    for (const [k, v] of Object.entries(m.campos)){
-      if (idx[k] === undefined) throw new Error("não achei a coluna de " + k + " na aba OC's. Nada foi gravado.");
-      plano.push({ end: _colLetra(t.col0 + idx[k]) + lin, v: k.startsWith("data_") ? _serialExcel(v) : v });
-    }
-  }
-  if (!plano.length) return 0;
-  const ws = await graphJson(_wbUrl() + "/tables/" + TABELA_OC + "/worksheet?$select=id,name", token);
-  const bases = [_wbUrl() + "/worksheets/" + encodeURIComponent(ws.id),
-                 _wbUrl() + "/worksheets('" + encodeURIComponent(String(ws.name).replace(/'/g, "''")) + "')"];
-  let base = null, feitas = 0;
-  try {
-    for (const p of plano){
-      const corpoReq = { values: [[p.v]] };
-      if (!base){
-        let erro = null;
-        for (const b0 of bases){
-          try { await graphJson(b0 + "/range(address='" + p.end + "')", token, "PATCH", corpoReq); base = b0; break; }
-          catch(e){ erro = e; if (!/HTTP 40[04]/.test(String(e.message))) break; }
-        }
-        if (!base) throw erro;
-      } else {
-        await graphJson(base + "/range(address='" + p.end + "')", token, "PATCH", corpoReq);
-      }
-      feitas++;
-    }
-  } catch(e){
-    const err = new Error((feitas ? "gravei " + feitas + " de " + plano.length + " células e parei: " : "") + (e.message || e));
-    err.parcial = feitas; throw err;
-  }
-  return feitas;
-}
-
-/* depois de gravar: relê só a planilha e refaz a conta com o Kondado da última leitura */
-let ULTIMO_K = null;
-async function recarregarOCs(){
-  if (!ULTIMO_K){ await atualizar(); return; }
-  const token = await getGraphToken();
-  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
-  const ocs = await ocListOpen(token, siteIdCache);
-  pintaFonte(aplicarAoVivo(ULTIMO_K, ocs), ocs);
-  render();
-}
-/* devolve "" se releu, ou um aviso pronto (HTML) se a gravação foi mas a releitura não */
-async function depoisDeGravar(){
-  try { await recarregarOCs(); return ""; }
-  catch(e){ return "Gravado na planilha, mas não consegui reler agora (" + esc(String(e.message||e)) +
-                   "). Clique em <b>Atualizar</b> para a conta pegar a mudança."; }
-}
-
-/* as linhas da aba OC's agrupadas em OCs: mesmo nº e mesmo fornecedor */
-function gruposOC(){
-  const g = {};
-  ((DATA.ocs && DATA.ocs.todas) || []).forEach(l=>{
-    const o = g[l.key] || (g[l.key] = {key:l.key, numero:l.numero || "", fornecedor:l.fornecedor || "",
-                                       linhas:[], data_pedido:null});
-    o.linhas.push(l);
-    if (l.data_pedido && (!o.data_pedido || l.data_pedido < o.data_pedido)) o.data_pedido = l.data_pedido;
-  });
-  return Object.values(g).map(o=>{
-    const ab = o.linhas.filter(l => !l.fechada);
-    o.aberta = ab.length > 0;
-    o.falta = ab.reduce((a,l)=> a + l.falta, 0);
-    o.prevista = ab.map(l => l.data_prevista).filter(Boolean).sort()[0] || null;
-    o.entrega = o.linhas.map(l => l.data_entrega).filter(Boolean).sort().pop() || null;
-    o.situacao = o.aberta ? "aberta" : o.linhas.every(l => l.cancelada) ? "cancelada" : "entregue";
-    o.status_txt = [...new Set(ab.map(l => l.status_planilha).filter(Boolean))].join(" · ");
-    /* OC lançada pela torre sem o nº do Tiny nas observações: é a lista do que falta lançar no ERP */
-    o.semTiny = o.situacao !== "cancelada" && o.linhas.some(l => ocSemTiny(l));
-    return o;
-  });
-}
-function ocSemTiny(l){
-  const ob = String(l.obs || "");
-  return /lan[çc]ada pela torre/i.test(ob) && !/\bTiny\s+\S/i.test(ob);
-}
-/* nº da próxima OC: o maior nº da planilha + 1 (a planilha numera 86, 103, 235…) */
-function proximoNumeroOC(){
-  let n = 0;
-  ((DATA.ocs && DATA.ocs.todas) || []).forEach(l=>{
-    const m = /^\s*(\d+)\s*$/.exec(String(l.numero || "")); if (m) n = Math.max(n, +m[1]); });
-  return n ? String(n + 1) : proximoNumero("compra");
-}
-function avisoOC(tit, linhas){
-  document.getElementById("conf-t").textContent = tit;
-  document.getElementById("conf-s").innerHTML = linhas.filter(Boolean).join("<br><br>");
-  document.getElementById("confirma").hidden = false;
-}
-async function mandarOCPlanilha(o){
-  const cs = document.getElementById("conf-s");
-  const aviso = (html)=>{ if (cs && document.getElementById("conf-t")) cs.innerHTML += "<br><br>" + html; };
-  aviso('<span id="oc-planilha">Gravando na planilha de BI (aba OC\'s)…</span>');
-  const marca = (html)=>{ const el = document.getElementById("oc-planilha"); if (el) el.innerHTML = html; };
-  try {
-    const r = await escreverOCPlanilha(o);
-    o.planilha = { em: new Date().toISOString(), ok: true }; gravarOrdem(o.id);
-    marca("<b>Gravada na planilha de BI</b> (aba OC's)." + (r.semCadastro.length
-      ? " Atenção: " + r.semCadastro.map(esc).join(", ") + " não está na aba Produtos — a linha entrou, mas o SKU vai sair 0 até cadastrar lá."
-      : ""));
-  } catch(e){
-    o.planilha = { em: new Date().toISOString(), ok: false, erro: String(e.message||e) }; gravarOrdem(o.id);
-    marca('<b style="color:var(--red,#d33)">Não consegui gravar na planilha:</b> ' + esc(String(e.message||e)) +
-          ". A ordem ficou só na torre — lance a linha na aba OC's à mão.");
-  }
-}
-const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelado" && o.data_prevista && o.quantidade > 0;
-
-/* ---------- aplica o dado ao vivo em cima do catálogo da torre ----------
-   A lista de itens (acabado, kits, insumos, fichas) continua a da torre; o que
-   muda é saldo, reserva, venda de 30 e 90 dias e a chegada prevista. */
-function aplicarAoVivo(k, ocs){
-  if (BASE) voltarPraBase();
-  const hoje = new Date(); hoje.setHours(0,0,0,0);
-  const hojeIso = _isoDate(hoje);
-  DATA.gerado_em = hojeIso; HOJE_ISO = hojeIso;
-  MES_HOJE = hojeIso.slice(0,7); DIA_HOJE = hoje.getDate();
-  DIAS_MES = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate();
-  NF_ATE = (typeof k.nf_ate === "string" && /^\d{4}-\d{2}-\d{2}/.test(k.nf_ate)) ? k.nf_ate.slice(0,10) : null;
-  if (NF_ATE && NF_ATE.slice(0,7) === MES_HOJE) DIA_HOJE = Number(NF_ATE.slice(8,10));
-
-  /* venda mensal por NF (chave vmes do Worker): refaz a serie do grafico e o "vendas no mes".
-     Sem ela, a serie fica a gravada no arquivo — e o mes corrente para no dia da gravacao. */
-  const vm = {}, temVm = Array.isArray(k.vmes) && k.vmes.length > 0;
-  (k.vmes||[]).forEach(r => { if (!r.sku || !r.mes) return; (vm[r.sku] || (vm[r.sku] = {}))[r.mes] = _toNum(r.qtd); });
-  const mesesVivos = [];
-  if (temVm){ let [a, m] = BASE_INI.split("-").map(Number);
-    while (true){ const key = a+"-"+String(m).padStart(2,"0"); if (key > MES_HOJE) break; mesesVivos.push(key); if (++m > 12){ m = 1; a++; } } }
-
-  const est = {}, prod = {}, v30 = {}, v3m = {};
-  (k.produtos||[]).forEach(p => { if (p.codigo) prod[p.codigo] = p; });
-  (k.estoque||[]).forEach(r => { if (r.codigo) est[r.codigo] = r; });
-  /* aceita o nome de coluna das consultas de pedido (itens_codigo/qtd_30d) ou das de NF (sku/qtd) */
-  (k.v30||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v30[c] = (r.qtd_30d ?? r.qtd); });
-  (k.v3m||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v3m[c] = (r.qtd_3m ?? r.qtd); });
-
-  const cheg = {};
-  ocs.filter(ocAberta).forEach(o=>{
-    const a = cheg[o.sku];
-    if (!a || o.data_prevista < a.d) cheg[o.sku] = {d:o.data_prevista, q:_toNum(o.quantidade), f:o.fornecedor};
-    else if (o.data_prevista === a.d) a.q += _toNum(o.quantidade);
-  });
-
-  let atualizados = 0; const semKondado = [];
-  CHEG_BASE = {};
-  DATA.skus.forEach(s=>{
-    const e = est[s.codigo], p = prod[s.codigo];
-    if (!e && !p){ semKondado.push(s.codigo); s.saldo_vivo = false; }
-    else {
-      atualizados++;
-      if (p && p.nome) s.nome = p.nome;
-      if (e){ s.saldo = _toNum(e.saldo); s.reservado = _toNum(e.saldoreservado); }
-      s.saldo_vivo = !!e;
-      const q30 = _toNum(v30[s.codigo]), q3m = _toNum(v3m[s.codigo]), media = q3m / 3;
-      let dem = media, trocou = false, alta = false, queda = false;
-      if (media > 0){
-        if (q30 > 1.5 * media){ dem = q30; trocou = true; alta = true; }
-        else if (q30 <= 0.5 * media){ dem = q30; trocou = true; queda = true; }
-      }
-      s.q30 = q30; s.q90 = q3m; s.media_mes = media; s.venda_diaria = dem / 30;
-      s.trocou = s.usando_30d = trocou; s.gatilho_alta = alta; s.gatilho_queda = queda;
-      s.aceleracao = media > 0 ? q30 / media : (q30 === 0 ? null : Infinity);
-      s.sem_historico = s.aceleracao !== null && isFinite(s.aceleracao) && Math.abs(s.aceleracao - 3) < 0.005;
-      /* mês com ruptura não vale como queda: guarda a régua de 3 meses ao lado */
-      if (queda && media > 0){
-        const vd = media / 30, cob = s.saldo / vd;
-        const rup = maisDias(hojeIso, Math.round(Math.max(cob,0)));
-        s.alt3m = {media_mes: media, venda_diaria: vd, cobertura: cob, trocou: false, ruptura: rup,
-                   pedir_ate: maisDias(rup, -s.leadtime), risco: s.saldo < 0 || cob < s.alvo,
-                   sugestao: null, giro_baixo: cob > 365, sem_giro: false};
-      } else s.alt3m = null;
-    }
-    if (temVm){
-      const vivo = vm[s.codigo] || {}, ser = {};
-      Object.keys(s.serie || {}).forEach(m => { if (m < BASE_INI) ser[m] = s.serie[m]; });
-      mesesVivos.forEach(m => { ser[m] = vivo[m] || 0; });
-      s.serie = ser; s.mes_atual = ser[MES_HOJE] || 0;
-    }
-    const c = cheg[s.codigo];
-    s.chegada_data = c ? c.d : null; s.chegada_qtd = c ? c.q : null; s.chegada_forn = c ? c.f : null;
-    s.forn_atrasado = !!(c && c.d < hojeIso);
-    CHEG_BASE[s.codigo] = {d:s.chegada_data, q:s.chegada_qtd, f:s.chegada_forn, res:s.reservado || 0};
-  });
-  DATA.ocs = ocs;
-  AO_VIVO = true; IGNORA_SIM = false;
-  BASE = null;               /* a nova linha de base é a leitura de agora */
-  explodir();
-  return {atualizados, semKondado};
-}
-
-/* ---------- MSAL ---------- */
-const MSAL_CDNS = [
-  "https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js",
-  "https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js",
-];
-function loadScriptOnce(url){
-  return new Promise((ok, fail)=>{ const s = document.createElement("script");
-    s.src = url; s.onload = ok; s.onerror = ()=>fail(new Error("falhou: " + url)); document.head.appendChild(s); });
-}
-async function ensureMsal(){
-  if (!window.msal){
-    let err = null;
-    for (const u of MSAL_CDNS){ try { await loadScriptOnce(u); if (window.msal) break; } catch(e){ err = e; } }
-    if (!window.msal) throw new Error("Não consegui carregar a biblioteca de login da Microsoft. " + (err ? err.message : ""));
-  }
-  if (!msalInstance){ msalInstance = new msal.PublicClientApplication(MSAL_CONFIG); await msalInstance.initialize(); }
-}
-let msalInstance = null, account = null, siteIdCache = null;
-async function getGraphToken(){
-  try { return (await msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account })).accessToken; }
-  catch(e){ return (await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES })).accessToken; }
-}
-function showApp(){
-  document.getElementById("login-screen").hidden = true;
-  document.getElementById("login-user").textContent = account ? (account.name || account.username) : "";
-  USUARIO = account ? (account.name || account.username || "") : "";
-  atualizar();
-}
-function showLogin(msg){
-  document.getElementById("login-screen").hidden = false;
-  document.getElementById("login-status").textContent = msg || "";
-}
-async function fazerLogin(){
-  const btn = document.getElementById("btn-login");
-  btn.disabled = true; document.getElementById("login-status").textContent = "Abrindo o login da Microsoft…";
-  try {
-    await ensureMsal();
-    const r = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
-    account = r.account; msalInstance.setActiveAccount(account);
-    showApp();
-  } catch(e){ document.getElementById("login-status").textContent = "Erro ao entrar: " + e.message; }
-  finally { btn.disabled = false; }
-}
-async function fazerLogout(){
-  const a = account; account = null; siteIdCache = null;
-  try { if (msalInstance && a) await msalInstance.logoutPopup({ account: a }); } catch(e){}
-  showLogin("");
-}
-async function initLogin(){
-  try {
-    await ensureMsal();
-    try { await msalInstance.handleRedirectPromise(); } catch(e){}
-    const contas = msalInstance.getAllAccounts();
-    if (contas.length){ account = contas[0]; msalInstance.setActiveAccount(account); showApp(); return; }
-  } catch(e){ showLogin(e.message); return; }
-  showLogin("");
-}
-
-/* ---------- Atualizar: Kondado + SharePoint ---------- */
-function pintaFonte(res, ocs){
-  const hm = new Date().toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
-  document.getElementById("stamp").textContent = "Atualizado " + dbr(DATA.gerado_em) + " às " + hm + " · Kondado + SharePoint" +
-    (NF_ATE ? " · NF até " + dbr(NF_ATE).slice(0,5) : " · data da última NF não informada");
-  document.getElementById("nota-fonte").innerHTML =
-    "<b>Dado ao vivo.</b> Estoque, cadastro e venda (nota fiscal emitida) vêm do <b>Tiny via Kondado</b>; " +
-    "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>" + esc(DRIVE_ITEM_PATH.split("/").pop()) + "</b> no SharePoint (AREA_BI) " +
-    "e são editados na aba Pedidos. " +
-    res.atualizados + " itens atualizados · " + ocs.filter(ocAberta).length + " OCs em aberto" +
-    (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + "." +
-    (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
-      return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
-        ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
-}
-async function atualizar(){
-  const c = document.getElementById("carga"), btn = document.getElementById("btn-atualizar");
-  c.hidden = false; btn.disabled = true;
-  try {
-    if (!account) throw new Error("Faça login com a Microsoft primeiro.");
-    const token = await getGraphToken();
-    if (!siteIdCache) siteIdCache = await resolveSiteId(token);
-    const [k, ocs] = await Promise.all([
-      fetch(WORKER_URL).then(r => { if (!r.ok) throw new Error("Kondado (Worker) HTTP " + r.status); return r.json(); }),
-      ocListOpen(token, siteIdCache),
-    ]);
-    if (k.error) throw new Error("Kondado: " + k.error);
-    /* bloco que falta vira zero na conta — foi assim que a venda de 30 dias sumiu em 24/09 e
-       o catalogo inteiro ficou "sem giro". Faltando algum, nao atualiza nada e diz qual. */
-    const faltam = ["produtos","estoque","v30","v3m","vmes"].filter(c => !Array.isArray(k[c]) || !k[c].length);
-    if (faltam.length) throw new Error("o Worker não mandou " + faltam.join(", ") +
-      ". Sem isso a conta sairia com zero no lugar do dado, então nada foi atualizado e a tela segue com a leitura anterior.");
-    const res = aplicarAoVivo(k, ocs);
-    ULTIMO_K = k;
-    pintaFonte(res, ocs);
-    render();
-  } catch(e){
-    alert("Erro ao atualizar: " + e.message);
-  } finally { c.hidden = true; btn.disabled = false; }
-}
-document.getElementById("btn-atualizar").onclick = atualizar;
-document.getElementById("btn-login").onclick = fazerLogin;
-document.getElementById("btn-logout").onclick = fazerLogout;
-
-explodir();
-document.documentElement.setAttribute("data-aba", state.aba);
-render();
-ligarDb();
-initLogin();
-
-</script>
-
-</body></html>
+  if (state.aba !== "mp
