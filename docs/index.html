@@ -820,6 +820,41 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
   color:var(--green);border-radius:8px;padding:9px 12px;font-size:12.2px;margin-top:10px}
 .okbox b{font-weight:600}
 .oitem.comp{grid-template-columns:minmax(0,1fr) auto auto auto}
+/* ---- OC da planilha: cada item e uma linha editavel ---- */
+.olin{display:grid;grid-template-columns:minmax(0,1fr) 100px 146px 172px 30px;gap:10px;align-items:end;
+  padding:9px 0;border-bottom:1px solid var(--border)}
+.olin .nm{min-width:0;align-self:center}
+.olin .nm b{display:block;font-weight:500;font-size:12.8px;overflow-wrap:anywhere}
+.olin .nm .mono{font-size:10.8px;color:var(--muted)}
+.olin label{display:flex;flex-direction:column;gap:3px;min-width:0}
+.olin label>span{font-size:9.6px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.olin input,.olin select{background:var(--bg);border:1px solid var(--border-strong);border-radius:6px;padding:6px 8px;
+  font:inherit;font-size:12.6px;color:var(--text);width:100%;min-width:0}
+.olin input[type=number]{text-align:right;font-variant-numeric:tabular-nums}
+.olin .mud{border-color:var(--accent);background:var(--accent-soft)}
+.olin .lixo{align-self:end;margin-bottom:2px}
+.olin.fech{grid-template-columns:minmax(0,1fr) auto}
+.olin.fech .nm b{color:var(--muted)}
+.olin.canc .nm b{text-decoration:line-through}
+.olin .stf{font-size:11.6px;color:var(--muted);text-align:right;align-self:center}
+.oerro{background:var(--red-soft);border:1px solid var(--red-line);color:var(--red);border-radius:8px;
+  padding:9px 12px;font-size:12.2px;line-height:1.45;margin:0 0 12px}
+.oerro b{font-weight:600}
+/* a etiqueta de situacao da lista herdava o grid de .sit (a lista de situacoes) e quebrava o texto */
+.ordl .sit{display:inline-block;gap:0}
+.ordl .sit:last-child{border-bottom-width:1px;border-bottom-style:solid}
+/* o campo de busca dentro de .oadd pegava a largura de 96px da quantidade */
+.oadd .tainput{width:100%;text-align:left}
+.ordform .btn:disabled{opacity:.5;cursor:not-allowed}
+.ocampo input.mud{border-color:var(--accent);background:var(--accent-soft)}
+.rot-loc{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);margin:20px 0 8px}
+@media (max-width:700px){
+  .olin{grid-template-columns:1fr 1fr 30px}
+  .olin .nm{grid-column:1/-1}
+  .olin label:nth-of-type(3){grid-column:1/3}
+  .olin.fech{grid-template-columns:1fr}
+  .olin.fech .stf{text-align:left}
+}
 /* ---- mini janela de pedido, dentro da gaveta ---- */
 .minip{border-top:1px solid var(--border);padding:14px 20px 16px;background:var(--surface-2)}
 .minip h4{font-size:12.6px;font-weight:600;margin:0 0 3px;display:flex;align-items:center;gap:7px}
@@ -2788,7 +2823,10 @@ function abrirSku(s0){
           return '<div class="ocline'+(atrasado?" auto":"")+'"><span><b>'+nf(o.quantidade)+' un.</b><br><span class="psku">'+
           esc(o.fornecedor)+(o.data_pedido?' · pedido em '+dbr(o.data_pedido).slice(0,5):'')+'</span></span>'+
           '<span style="text-align:right">'+(o.data_entrega ? 'chegou '+dbr(o.data_entrega) : dbr(o.data_prevista))+
-          '<br><span class="psku">'+esc(o.status)+(atrasado?' · vencido':'')+'</span></span></div>';
+          '<br><span class="psku">'+esc(o.status)+(atrasado?' · vencido':'')+'</span>'+
+          (AO_VIVO && o.key ? '<br><button class="link" data-oc-ed="'+esc(o.key)+'">'+
+            (o.status === "Pendente" ? 'editar OC '+esc(o.numero||"") : 'abrir OC '+esc(o.numero||""))+'</button>' : '')+
+          '</span></div>';
         }).join("")
         : '<p class="dim">Nenhum pedido registrado.</p>')+'</div>'+
     blocoRupturas(s0) + blocoComposicao(s) + blocoNotas(s0) +
@@ -2887,6 +2925,7 @@ function abrirSku(s0){
       abrirSku(t);
     };
   });
+  body.querySelectorAll("[data-oc-ed]").forEach(b=>{ b.onclick = ()=> abrirOC(b.dataset.ocEd, "editar"); });
   abrirDrawer();
   if (typeof pintaMini === "function") pintaMini();
 }
@@ -3094,6 +3133,15 @@ function pintaMini(){
     box.querySelector("#mini-fechar").onclick = fecharMini;
     return;
   }
+  if (MINI.novoOC){
+    box.innerHTML = '<div class="feito">'+icon("ok",15)+
+      '<span><b>OC '+esc(MINI.novoOC)+'</b> gravada na planilha — já conta na cobertura deste produto.'+
+      (MINI.aviso ? ' '+MINI.aviso : '')+'</span>'+
+      '<button class="btn" id="mini-fechar" style="margin-left:auto;padding:5px 11px;font-size:11.8px">Fechar</button></div>';
+    document.getElementById("d-foot").after(box);
+    box.querySelector("#mini-fechar").onclick = fecharMini;
+    return;
+  }
 
   const m = producao ? montavelDe(s0.codigo) : null;
   const tr = m && m.trava ? PORCOD[m.trava] : null;
@@ -3105,7 +3153,7 @@ function pintaMini(){
 
   box.innerHTML =
     '<h4>'+icon(producao?"kit":"pedido",14)+
-      (producao ? "Ordem de produção" : "Ordem de compra")+' · '+esc(proximoNumero(producao?"producao":"compra"))+'</h4>'+
+      (producao ? "Ordem de produção · "+esc(proximoNumero("producao")) : "Ordem de compra · OC "+esc(proximoNumeroOC()))+'</h4>'+
     '<p class="sub">'+(producao
       ? 'Este produto tem ficha técnica, então o que falta é <b>montar</b>, não comprar. A ordem segura os componentes.'
       : 'A torre sugere <b>'+nf(e.sugestao||0)+'</b> un. para voltar ao alvo de '+e.alvo+' dias.')+'</p>'+
@@ -3166,9 +3214,27 @@ function pintaMini(){
         montagem:(f.montagem != null) ? f.montagem : 2, ficha_estado:f.estado,
         obs:"", data_pedido:HOJE_ISO, data_prevista:d, status:"aberta", por:USUARIO, em:HOJE_ISO};
     } else {
-      ORDENS[id] = {id:id, tipo:"compra", numero:proximoNumero("compra"), numero_tiny:"",
+      /* compra nao fica na torre: vai direto para a aba OC's */
+      const erro = msg => {
+        let el = box.querySelector(".mini-erro");
+        if (!el){ el = document.createElement("div"); el.className = "avisinho mau mini-erro"; box.querySelector(".pe").before(el); }
+        el.innerHTML = "<b>Não gravou.</b> " + esc(msg);
+      };
+      if (!AO_VIVO || !account) return erro("entre com a Microsoft e clique em Atualizar antes — a OC é gravada na planilha do SharePoint.");
+      if (!String(forn || "").trim()) return erro("escolha o fornecedor.");
+      const oc = {id:id, tipo:"compra", numero:proximoNumeroOC(), numero_tiny:"",
         fornecedor:forn, itens:[{c:s0.codigo, qtd:q, recebido:0}],
         obs:"", data_pedido:HOJE_ISO, data_prevista:d, status:"aberta", por:USUARIO, em:HOJE_ISO};
+      const okb = box.querySelector("#mini-ok");
+      okb.disabled = true; okb.textContent = "Gravando…";
+      escreverOCPlanilha(oc).then(async r=>{
+        const reler = await depoisDeGravar();
+        MINI = {novoOC: oc.numero, aviso: ((r.semCadastro || []).length
+          ? "Atenção: o SKU não está na aba Produtos — a linha entrou, mas sai 0 até cadastrar lá." : "") + (reler ? " " + reler : "")};
+        const s1 = PORCOD[s0.codigo];
+        if (s1 && ABERTO === s0.codigo) abrirSku(s1); else pintaMini();
+      }).catch(e=>{ okb.disabled = false; okb.textContent = "Registrar"; erro(String(e.message || e)); });
+      return;
     }
     gravarOrdem(id);
     MINI = {novo:id};
@@ -3216,7 +3282,7 @@ const ABAS = [
   {id:"mp",      rot:"Matérias-primas", ico:"kit",
    sub:()=> esc(nEscopo("insumo")+" componentes · demanda explodida das fichas técnicas")},
   {id:"pedidos", rot:"Pedidos",         ico:"pedido",
-   sub:()=> "ordens de compra registradas · a de produção nasce depois da homologação"},
+   sub:()=> "ordens de compra da aba OC's da planilha de BI · a de produção nasce depois da homologação"},
 ];
 function nEscopo(e){ return DATA.skus.filter(s => (s.escopos||["acabado"]).includes(e) && s.real).length; }
 
@@ -3241,7 +3307,8 @@ function renderAbas(){
     b.setAttribute("aria-selected", at ? "true" : "false");
     /* a aba de pedidos conta ordens em aberto, nao SKUs */
     const n = a.id === "pedidos"
-      ? Object.values(ORDENS).filter(o=>o.status === "aberta").length
+      ? (AO_VIVO ? gruposOC().filter(o=>o.aberta).length : 0) +
+        Object.values(ORDENS).filter(o=>o.status === "aberta" && (o.tipo === "producao" || !(o.planilha && o.planilha.ok))).length
       : nEscopo(a.id === "mp" ? "insumo" : "acabado");
     b.innerHTML = icon(a.ico,15) + esc(a.rot) +
       (a.breve ? '<span class="breve">em breve</span>' : '<span class="n">'+n+'</span>');
@@ -3265,49 +3332,72 @@ function renderAbas(){
 function renderPedidos(){
   const st = state.ped;
   const el = document.getElementById("painel-pedidos");
+  if (st.oc){ el.innerHTML = "";
+    el.append(st.oc.modo === "receber" ? telaReceberOC() : telaOC()); return; }
   if (st.form){ el.innerHTML = "";
     el.append(st.form.tipo === "producao" ? telaOrdemOP() : telaOrdem()); return; }
   if (st.receb){ el.innerHTML = "";
     const o = ORDENS[st.receb];
     el.append(o && o.tipo === "producao" ? telaExecucao() : telaRecebimento()); return; }
 
-  const reais = Object.values(ORDENS).slice()
-    .sort((x,y)=>String(y.data_pedido||"").localeCompare(String(x.data_pedido||"")));
-  const abertas = reais.filter(o=>o.status === "aberta");
-  const semTiny = reais.filter(o=>!o.numero_tiny && o.status !== "cancelada").length;
-  const simuladas = AO_VIVO ? DATA.ocs.filter(ocAberta) : (IGNORA_SIM ? [] : DATA.ocs);
-
-  const visiveis = reais.filter(o=>{
-    if (st.sit === "abertas") return o.status === "aberta";
-    if (st.sit === "fechadas") return o.status !== "aberta";
-    if (st.sit === "semtiny")  return !o.numero_tiny && o.status !== "cancelada";
-    return true;
-  });
+  /* compra = as OCs da aba OC's. O livro local fica só com produção e com alguma compra
+     antiga que nunca chegou à planilha (a que chegou já aparece lá, não conta duas vezes) */
+  const grupos = AO_VIVO ? gruposOC() : [];
+  const locais = Object.values(ORDENS).filter(o => o.tipo === "producao" || !(o.planilha && o.planilha.ok));
+  const abG = o => o.aberta, abL = o => o.status === "aberta";
+  const tiG = o => o.semTiny, tiL = o => !o.numero_tiny && o.status !== "cancelada";
+  const nAb = grupos.filter(abG).length + locais.filter(abL).length;
+  const nTot = grupos.length + locais.length;
+  const nTiny = grupos.filter(tiG).length + locais.filter(tiL).length;
+  if (!["abertas","fechadas","semtiny","todas"].includes(st.sit)) st.sit = "abertas";
+  const filtra = (arr, ab, ti) => st.sit === "abertas" ? arr.filter(ab) : st.sit === "fechadas" ? arr.filter(x => !ab(x))
+                                : st.sit === "semtiny" ? arr.filter(ti) : arr.slice();
+  const gVis = filtra(grupos, abG, tiG).sort(st.sit === "abertas"
+    ? (a,b)=> String(a.prevista || "9").localeCompare(String(b.prevista || "9"))
+    : (a,b)=> String(b.data_pedido || "").localeCompare(String(a.data_pedido || "")));
+  const lVis = filtra(locais, abL, tiL).sort((x,y)=> String(y.data_pedido || "").localeCompare(String(x.data_pedido || "")));
 
   const cab =
     '<div class="pedcab">'+
       '<div class="tx"><h2>ORDENS DE COMPRA E DE PRODUÇÃO</h2>'+
-      '<p>Livro de registro da torre. A ordem lançada aqui <b>conta na cobertura</b> na hora — '+
-      'e o campo <b>nº no Tiny</b> em branco é a lista do que ainda falta lançar no ERP.</p></div>'+
+      '<p>As ordens de compra moram na aba <b>OC\'s</b> da planilha de BI no SharePoint, e é aqui que elas se mexem: '+
+      'OC nova, data prevista, quantidade, item, recebimento e cancelamento são <b>gravados direto na planilha</b> '+
+      'e entram na cobertura na hora. Não precisa abrir o Excel.</p></div>'+
       '<div class="pedbtn">'+
         '<button class="btn btn-primary" id="ped-nova">'+icon("pedido",14)+'Nova ordem de compra</button>'+
         '<button class="btn btn-primary" id="ped-novaop">'+icon("kit",14)+'Nova ordem de produção</button>'+
       '</div>'+
     '</div>';
 
+  const semLeitura = AO_VIVO ? '' :
+    '<div class="faviso" style="margin-bottom:12px"><span>▲</span><span><b>As OCs da planilha ainda não foram lidas.</b> '+
+    'Entre com a Microsoft e clique em <b>Atualizar</b> para ver e editar as ordens de compra.</span></div>';
+
   const chips =
     '<div class="pedfil">'+
-      [["abertas","Em aberto",abertas.length],
-       ["fechadas","Encerradas",reais.length-abertas.length],
-       ["semtiny","Não lançadas no Tiny",semTiny],
-       ["todas","Todas",reais.length]].map(([k,r,n])=>
-        '<button class="chip'+(st.sit===k?" on":"")+(k==="semtiny"&&n?" alerta":"")+'" data-sit="'+k+'">'+
-        esc(r)+' <span class="c num">'+n+'</span></button>').join("")+
-      ((AO_VIVO || !DATA.ocs.length) ? '' : '<button class="link" id="ped-sim">'+(IGNORA_SIM
-        ? "Voltar a considerar os "+DATA.ocs.length+" pedidos simulados"
-        : "Ignorar os "+DATA.ocs.length+" pedidos simulados da maquete")+'</button>')+
+      [["abertas","Em aberto",nAb],["fechadas","Encerradas",nTot-nAb],["semtiny","Não lançadas no Tiny",nTiny],["todas","Todas",nTot]].map(([k,r,n])=>
+        '<button class="chip'+(st.sit===k?" on":"")+(k==="semtiny"&&n?" alerta":"")+'" data-sit="'+k+'">'+esc(r)+' <span class="c num">'+n+'</span></button>').join("")+
     '</div>';
 
+  /* uma OC da planilha */
+  const linhaOC = o => {
+    const atrasada = o.aberta && o.prevista && o.prevista < DATA.gerado_em;
+    const nomes = o.linhas.map(nomeLinhaOC);
+    const cls = o.situacao === "aberta" ? "ab" : o.situacao === "cancelada" ? "ca" : "fe";
+    return '<div class="ordl'+(atrasada?" atras":"")+'" data-oc="'+esc(o.key)+'">'+
+      '<span class="n"><b>OC '+esc(o.numero || "sem nº")+'</b>'+
+        '<span class="sit '+cls+'">'+esc(o.situacao === "aberta" ? (o.status_txt || "em aberto") : o.situacao)+'</span>'+
+        (o.semTiny ? '<span class="sit tiny">sem nº no Tiny</span>' : '')+'</span>'+
+      '<span class="f"><b>'+esc(o.fornecedor || "sem fornecedor")+'</b>'+
+        '<span class="it">'+esc(nomes.slice(0,2).join(" · "))+(nomes.length>2 ? " · +"+(nomes.length-2) : "")+'</span></span>'+
+      '<span class="q">'+nf(o.falta)+'<span class="un"> un. a chegar</span></span>'+
+      '<span class="d">'+(o.aberta
+        ? icon("transito",13)+" "+dbr(o.prevista)+(atrasada?" · vencida":"")
+        : icon("recebimento",13)+" "+dbr(o.entrega))+'</span>'+
+      (o.aberta ? '<button class="btn" data-receber-oc="'+esc(o.key)+'">Receber</button>' : '<span></span>')+
+    '</div>';
+  };
+  /* uma ordem do livro local (produção, ou compra que não chegou à planilha) */
   const linha = o => {
     const falta = faltaDe(o);
     const atrasada = o.status === "aberta" && String(o.data_prevista) < DATA.gerado_em;
@@ -3319,11 +3409,11 @@ function renderPedidos(){
     return '<div class="ordl'+(atrasada?" atras":"")+'" data-ver="'+esc(o.id)+'">'+
       '<span class="n"><b>'+esc(o.numero)+'</b>'+
         '<span class="sit '+(o.status==="aberta"?"ab":o.status==="cancelada"?"ca":"fe")+'">'+
-        (prod?"produção · ":"compra · ")+
-        esc(o.status)+'</span>'+
-        (!o.numero_tiny && o.status!=="cancelada" ? '<span class="sit tiny">sem nº no Tiny</span>' : '')+'</span>'+
+        (prod?"produção · ":"compra · ")+esc(o.status)+'</span>'+
+        (!o.numero_tiny && o.status!=="cancelada" ? '<span class="sit tiny">sem nº no Tiny</span>' : '')+
+        (!prod ? '<span class="sit tiny">fora da planilha</span>' : '')+'</span>'+
       '<span class="f"><b>'+esc(prod ? (pr ? titulo(pr.nome) : o.produto) : (o.fornecedor||"sem fornecedor"))+'</b>'+
-        '<span class="it">'+nomes.slice(0,2).join(" · ")+
+        '<span class="it">'+esc(nomes.slice(0,2).join(" · "))+
         (nomes.length>2 ? " · +"+(nomes.length-2) : "")+'</span></span>'+
       '<span class="q">'+nf(falta)+'<span class="un"> un. '+(prod?'a montar':'a chegar')+'</span></span>'+
       '<span class="d">'+(o.status==="aberta"
@@ -3335,40 +3425,25 @@ function renderPedidos(){
     '</div>';
   };
 
-  const lista = visiveis.length
-    ? visiveis.map(linha).join("")
-    : '<p class="dim" style="padding:20px 0;font-size:12.6px">'+
-      (reais.length ? 'Nenhuma ordem neste recorte.'
-       : 'Nenhuma ordem registrada ainda. A primeira que você lançar já entra na cobertura.')+'</p>';
+  const temCompraLocal = lVis.some(o => o.tipo !== "producao");
+  const rotLocal = 'Ordens de produção'+(temCompraLocal ? ' e compras que não chegaram à planilha' : '')+
+                   (DB ? '' : ' · ficam só neste navegador');
+  const vazio = '<p class="dim" style="padding:20px 0;font-size:12.6px">'+
+    (nTot ? 'Nenhuma ordem neste recorte.' : AO_VIVO ? 'Nenhuma ordem na planilha ainda.' : '')+'</p>';
 
-  const sim = simuladas.length ? '<details class="simbox"><summary>'+
-      (AO_VIVO ? simuladas.length+' OCs em aberto na planilha do SharePoint contam na cobertura'
-               : simuladas.length+' pedidos simulados da maquete ainda contam na cobertura')+
-      '</summary><p class="dim">'+(AO_VIVO
-        ? 'Lidas da aba OC\'s da planilha '+esc(DRIVE_ITEM_PATH.split("/").pop())+' (SharePoint, AREA_BI) no último Atualizar. '+
-          'Ordem lançada aqui na torre para o mesmo SKU tem prioridade sobre a planilha.'
-        : 'Foram inventados para a demonstração — '+
-          'a planilha de OC nunca esteve conectada, e o Kondado só traz pedido de venda. '+
-          'São eles que deixam 16 SKUs verdes hoje. Desligue acima quando começar a registrar de verdade.')+'</p>'+
-      simuladas.slice().sort((a,b)=>String(a.data_prevista).localeCompare(String(b.data_prevista)))
-      .map(o=>{ const sk = PORCOD[o.sku];
-        return '<div class="ocl"><span class="a">'+esc(sk?titulo(sk.nome):o.sku)+'</span>'+
-        '<span class="b">'+nf(o.quantidade)+' un.</span>'+
-        '<span class="c"><span class="mono">'+esc(o.sku)+'</span> · '+esc(o.fornecedor)+'</span>'+
-        '<span class="d">'+dbr(o.data_prevista)+'</span></div>'; }).join("")+'</details>' : '';
-
-  el.innerHTML = cab + chips + '<div class="ordlista">'+lista+'</div>' + sim;
+  el.innerHTML = cab + semLeitura + chips +
+    (gVis.length || lVis.length ? '' : vazio) +
+    (gVis.length ? '<div class="ordlista">'+gVis.map(linhaOC).join("")+'</div>' : '') +
+    (lVis.length ? '<div class="rot-loc">'+esc(rotLocal)+'</div><div class="ordlista">'+lVis.map(linha).join("")+'</div>' : '');
 
   document.getElementById("ped-nova").onclick = ()=>{ abrirFormOC(); };
   document.getElementById("ped-novaop").onclick = ()=>{ abrirFormOP(); };
-  const pedSim = document.getElementById("ped-sim");
-  if (pedSim) pedSim.onclick = ()=>{
-    IGNORA_SIM = !IGNORA_SIM;
-    try { localStorage.setItem("torre_ignora_sim", IGNORA_SIM ? "1" : "0"); } catch(e){}
-    explodir(); render();
-  };
   el.querySelectorAll("[data-sit]").forEach(b=>{
     b.onclick = ()=>{ st.sit = b.dataset.sit; renderPedidos(); };
+  });
+  el.querySelectorAll("[data-oc]").forEach(b=>{ b.onclick = ()=> abrirOC(b.dataset.oc, "editar"); });
+  el.querySelectorAll("[data-receber-oc]").forEach(b=>{
+    b.onclick = e=>{ e.stopPropagation(); abrirOC(b.dataset.receberOc, "receber"); };
   });
   el.querySelectorAll("[data-receber]").forEach(b=>{
     b.onclick = e=>{ e.stopPropagation(); st.receb = b.dataset.receber; renderPedidos(); };
@@ -3384,6 +3459,335 @@ function renderPedidos(){
   });
 }
 
+/* ---------- OC da planilha: ver e editar ----------
+   Cada item é uma linha da aba OC's. Mudou data, quantidade ou status: a torre grava
+   só aquelas células. Tirar um item não apaga a linha — ela vira "Cancelado", que é o
+   que o BI precisa para a história continuar certa. Item novo entra como linha nova
+   com o mesmo nº de OC e o mesmo fornecedor. */
+/* a mesma lista suspensa da aba Listas (sem Entregue e Cancelado, que têm botão próprio) */
+const ST_ABERTOS = ["Pendente","Em Produção","Aguardando Coleta","Em Trânsito"];
+function ocDaTela(){ const st = state.ped.oc; return st ? gruposOC().find(o => o.key === st.key) : null; }
+function nomeLinhaOC(l){
+  const r = l.sku ? PORCOD[l.sku] : null;
+  return r ? titulo(r.nome) : titulo(l.descricao || l.sku || "item sem descrição");
+}
+function abrirOC(key, modo){
+  state.ped.oc = {key, modo: modo || "editar", ed:{}, novos:[], erro:null, gravando:false,
+                  ch:null, rmodo:null, nf:"", data:HOJE_ISO, todas:""};
+  state.ped.form = null; state.ped.receb = null;
+  if (ABERTO) fechar();
+  state.aba = "pedidos"; document.documentElement.setAttribute("data-aba","pedidos");
+  render();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+function mudancasOC(o, st){
+  const mud = [];
+  o.linhas.forEach(l=>{
+    const e = st.ed[l.b]; if (!e || l.fechada) return;
+    const campos = {};
+    if (e.cancelar) campos.status = "Cancelado";
+    else {
+      if (e.qtd != null && e.qtd > 0 && e.qtd !== l.qOC) campos.quantidade = e.qtd;
+      if (e.prevista && e.prevista !== l.data_prevista) campos.data_prevista = e.prevista;
+      if (e.status != null && e.status !== (l.status_planilha || "")) campos.status = e.status;
+    }
+    if (Object.keys(campos).length) mud.push({b:l.b, fp:l.fp, rot:"OC "+o.numero+" · "+nomeLinhaOC(l), campos, l});
+  });
+  const tiny = String(st.tiny || "").trim();
+  if (tiny) o.linhas.filter(ocSemTiny).forEach(l=>{
+    let m = mud.find(x => x.b === l.b);
+    if (!m){ m = {b:l.b, fp:l.fp, rot:"OC "+o.numero+" · "+nomeLinhaOC(l), campos:{}, l}; mud.push(m); }
+    m.campos.obs = String(l.obs || "").trim() + " · Tiny " + tiny;
+  });
+  return mud;
+}
+function _ocNaoAchada(box){
+  box.innerHTML = '<div class="ordform"><div class="oh"><button class="link" id="x-voltar">← voltar para a lista</button></div>'+
+    '<p class="dim" style="font-size:12.6px">Esta OC não apareceu na última leitura da planilha. Clique em Atualizar.</p></div>';
+  setTimeout(()=>{ const v = box.querySelector("#x-voltar"); if (v) v.onclick = ()=>{ state.ped.oc = null; renderPedidos(); }; }, 0);
+  return box;
+}
+function telaOC(){
+  const st = state.ped.oc, o = ocDaTela();
+  const box = document.createElement("div");
+  if (!o) return _ocNaoAchada(box);
+  const abertas = o.linhas.filter(l => !l.fechada);
+  const lin = o.linhas.map(l=>{
+    const e = st.ed[l.b] || {};
+    const nm = '<span class="nm"><b>'+esc(nomeLinhaOC(l))+'</b><span class="mono">'+
+      esc(l.sku || "sem SKU na aba Produtos")+(l.qNF > 0 ? ' · já veio '+nf(l.qNF) : '')+'</span></span>';
+    if (l.fechada) return '<div class="olin fech">'+nm+'<span class="stf">'+
+      esc(l.status_planilha || (l.cancelada ? "Cancelado" : "Entregue"))+
+      (l.data_entrega && !l.cancelada ? ' em '+dbr(l.data_entrega) : '')+(l.nf && !l.cancelada ? ' · NF '+esc(l.nf) : '')+
+      ' · '+nf(l.qOC)+' un.</span></div>';
+    if (e.cancelar) return '<div class="olin fech canc">'+nm+'<span class="stf">vai para <b>Cancelado</b> ao salvar · '+
+      '<button class="link" data-eu="'+l.b+'">desfazer</button></span></div>';
+    const q = e.qtd ?? l.qOC, d = e.prevista ?? l.data_prevista ?? "", s = e.status ?? (l.status_planilha || "");
+    const opts = (ST_ABERTOS.includes(s) ? ST_ABERTOS : [s].concat(ST_ABERTOS)).map(x=>
+      '<option value="'+esc(x)+'"'+(x===s?' selected':'')+'>'+esc(x || "(em branco)")+'</option>').join("");
+    return '<div class="olin">'+nm+
+      '<label><span>Qtd. da OC</span><input type="number" min="1" step="1" value="'+q+'" data-eq="'+l.b+'"'+
+        (q !== l.qOC ? ' class="mud"' : '')+'></label>'+
+      '<label><span>Previsão/ETA</span><input type="date" value="'+esc(d)+'" data-ed="'+l.b+'"'+
+        (d !== (l.data_prevista || "") ? ' class="mud"' : '')+'></label>'+
+      '<label><span>Status</span><select data-es="'+l.b+'"'+(s !== (l.status_planilha || "") ? ' class="mud"' : '')+'>'+opts+'</select></label>'+
+      '<button class="lixo" data-ec="'+l.b+'" aria-label="Cancelar este item" title="Cancelar este item">'+icon("lixo",15)+'</button>'+
+    '</div>';
+  }).join("");
+  const novos = st.novos.map((n,i)=>{ const r = PORCOD[n.c];
+    return '<div class="olin novo"><span class="nm"><b>'+esc(r ? titulo(r.nome) : n.c)+'</b>'+
+        '<span class="mono">'+esc(n.c)+' · item novo nesta OC</span></span>'+
+      '<label><span>Quantidade</span><input type="number" min="1" step="1" value="'+n.qtd+'" data-nq="'+i+'" class="mud"></label>'+
+      '<label><span>Previsão/ETA</span><input type="date" value="'+esc(n.prevista || "")+'" data-nd="'+i+'" class="mud"></label>'+
+      '<span></span>'+
+      '<button class="lixo" data-nx="'+i+'" aria-label="Tirar o item novo" title="Tirar o item novo">'+icon("lixo",15)+'</button></div>';
+  }).join("");
+  const nMud = mudancasOC(o, st).length + st.novos.length;
+  const txtMud = n => n ? '<b>'+n+'</b> '+(n === 1 ? 'alteração' : 'alterações')+' para gravar' : 'nada alterado ainda';
+
+  box.innerHTML =
+    '<div class="ordform">'+
+      '<div class="oh"><button class="link" id="x-voltar">← voltar para a lista</button>'+
+        '<h2>OC '+esc(o.numero || "sem nº")+' · '+esc(o.fornecedor || "sem fornecedor")+'</h2>'+
+        '<p class="dim" style="margin:4px 0 0;font-size:12px">'+(o.data_pedido ? 'Pedida em '+dbr(o.data_pedido)+' · ' : '')+
+          o.linhas.length+' linha'+(o.linhas.length === 1 ? '' : 's')+' na aba OC\'s · o que você mudar aqui é gravado na planilha</p></div>'+
+      (o.semTiny
+        ? '<div class="ogrid"><label class="ocampo"><span>Nº no Tiny</span>'+
+            '<input type="text" id="x-tiny" value="'+esc(st.tiny || "")+'" placeholder="preencher ao lançar lá">'+
+            '<em>esta OC foi lançada pela torre e ainda não tem o nº do Tiny — vai para Observações</em></label></div>'
+        : '')+
+      (abertas.length > 1
+        ? '<div class="ogrid"><label class="ocampo"><span>Mudar a previsão de todos os itens em aberto</span>'+
+            '<input type="date" id="x-todas" value="'+esc(st.todas || "")+'"></label>'+
+            '<div class="ocampo" style="flex:0 0 auto;min-width:0;justify-content:flex-end">'+
+            '<button class="btn" id="x-aplicar">Aplicar a todos</button></div></div>'
+        : '')+
+      '<div class="osec"><div class="rot">Itens da OC</div>'+lin+novos+
+        (abertas.length || st.novos.length ? '<div class="oadd"><div id="x-busca"></div></div>' : '')+
+      '</div>'+
+      (st.erro ? '<div class="oerro"><b>'+esc(st.erroTit || "Não gravou.")+'</b> '+esc(st.erro)+'</div>' : '')+
+      '<div class="ope">'+
+        (abertas.length
+          ? '<button class="btn" id="x-cancelar">Cancelar a OC inteira</button>'+
+            '<button class="btn" id="x-receber">'+icon("recebimento",14)+'Receber mercadoria</button>'
+          : '')+
+        '<span class="dir">'+txtMud(nMud)+'</span>'+
+        '<button class="btn btn-primary" id="x-salvar"'+(nMud && !st.gravando ? '' : ' disabled')+'>'+
+          (st.gravando ? 'Gravando na planilha…' : 'Salvar na planilha')+'</button>'+
+      '</div>'+
+    '</div>';
+
+  setTimeout(()=>{
+    const porB = {}; o.linhas.forEach(l=>{ porB[l.b] = l; });
+    const ed = b => st.ed[b] || (st.ed[b] = {});
+    const rodape = ()=>{
+      const n = mudancasOC(o, st).length + st.novos.length;
+      const dir = box.querySelector(".ope .dir"); if (dir) dir.innerHTML = txtMud(n);
+      const sv = box.querySelector("#x-salvar"); if (sv) sv.disabled = !n || st.gravando;
+    };
+    box.querySelector("#x-voltar").onclick = ()=>{ state.ped.oc = null; renderPedidos(); };
+    const ti = box.querySelector("#x-tiny");
+    if (ti) ti.oninput = ()=>{ st.tiny = ti.value; ti.classList.toggle("mud", !!ti.value.trim()); rodape(); };
+    box.querySelectorAll("[data-eq]").forEach(inp=>{
+      const l = porB[inp.dataset.eq];
+      inp.oninput = ()=>{ const v = Math.floor(Number(inp.value));
+        if (v > 0) ed(l.b).qtd = v;
+        inp.classList.toggle("mud", v > 0 && v !== l.qOC); rodape(); };
+      inp.onchange = ()=>{ if (!(Math.floor(Number(inp.value)) > 0)) inp.value = ed(l.b).qtd ?? l.qOC; };
+    });
+    box.querySelectorAll("[data-ed]").forEach(inp=>{
+      const l = porB[inp.dataset.ed];
+      inp.oninput = inp.onchange = ()=>{ ed(l.b).prevista = inp.value || null;
+        inp.classList.toggle("mud", !!inp.value && inp.value !== (l.data_prevista || "")); rodape(); };
+    });
+    box.querySelectorAll("[data-es]").forEach(sel=>{
+      const l = porB[sel.dataset.es];
+      sel.onchange = ()=>{ ed(l.b).status = sel.value;
+        sel.classList.toggle("mud", sel.value !== (l.status_planilha || "")); rodape(); };
+    });
+    box.querySelectorAll("[data-ec]").forEach(b=>{ b.onclick = ()=>{ ed(+b.dataset.ec).cancelar = true; renderPedidos(); }; });
+    box.querySelectorAll("[data-eu]").forEach(b=>{ b.onclick = ()=>{ ed(+b.dataset.eu).cancelar = false; renderPedidos(); }; });
+    box.querySelectorAll("[data-nq]").forEach(inp=>{
+      inp.oninput = ()=>{ const v = Math.floor(Number(inp.value)); if (v > 0) st.novos[+inp.dataset.nq].qtd = v; };
+    });
+    box.querySelectorAll("[data-nd]").forEach(inp=>{
+      inp.oninput = inp.onchange = ()=>{ if (inp.value) st.novos[+inp.dataset.nd].prevista = inp.value; };
+    });
+    box.querySelectorAll("[data-nx]").forEach(b=>{ b.onclick = ()=>{ st.novos.splice(+b.dataset.nx, 1); renderPedidos(); }; });
+    const bh = box.querySelector("#x-busca");
+    if (bh) montaBusca(bh, {
+      placeholder: "Incluir item nesta OC: digite o nome ou o SKU…",
+      itens: ()=> DATA.skus.filter(x => x.real && !o.linhas.some(l => l.sku === x.codigo && !l.fechada)
+                                    && !st.novos.some(n => n.c === x.codigo)).map(itemBusca),
+      aoEscolher: cod=>{
+        const s0 = PORCOD[cod];
+        st.novos.push({c:cod, qtd: Math.max(1, (s0 && ef(s0).sugestao) || 1),
+                       prevista: st.todas || o.prevista || maisDias(HOJE_ISO, leadDe(cod))});
+        renderPedidos();
+      }
+    });
+    const ap = box.querySelector("#x-aplicar");
+    if (ap) ap.onclick = ()=>{
+      const v = box.querySelector("#x-todas").value; if (!v) return;
+      st.todas = v;
+      o.linhas.forEach(l=>{ if (!l.fechada && !(st.ed[l.b] || {}).cancelar) ed(l.b).prevista = v; });
+      st.novos.forEach(n=>{ n.prevista = v; });
+      renderPedidos();
+    };
+    const cc = box.querySelector("#x-cancelar");
+    if (cc) cc.onclick = ()=>{
+      if (cc.dataset.certo !== "1"){ cc.dataset.certo = "1"; cc.textContent = "Cancelar mesmo? Todos os itens em aberto";
+        cc.style.color = "var(--red)"; cc.style.borderColor = "var(--red-line)"; return; }
+      gravarOC(o, abertas.map(l=>({b:l.b, fp:l.fp, rot:"OC "+o.numero+" · "+nomeLinhaOC(l), campos:{status:"Cancelado"}, l})), [], "cancelada");
+    };
+    const rc = box.querySelector("#x-receber");
+    if (rc) rc.onclick = ()=>{ st.modo = "receber"; st.erro = null; renderPedidos(); };
+    box.querySelector("#x-salvar").onclick = ()=>{
+      const novosOk = st.novos.filter(n => n.qtd > 0 && n.prevista);
+      if (novosOk.length < st.novos.length){ st.erro = "item novo sem quantidade ou sem previsão."; st.erroTit = null; renderPedidos(); return; }
+      gravarOC(o, mudancasOC(o, st), novosOk, "atualizada");
+    };
+  }, 0);
+  return box;
+}
+
+/* grava o que a tela montou e conta o que mudou */
+async function gravarOC(o, mud, novos, verbo){
+  const st = state.ped.oc;
+  if (!st || (!mud.length && !novos.length)) return;
+  st.gravando = true; st.erro = null; st.erroTit = null; renderPedidos();
+  let semCad = [], passo = 0;
+  try {
+    if (mud.length){ await gravarNaPlanilhaOC(mud); passo = 1; }
+    if (novos.length){
+      const r = await escreverOCPlanilha({numero:o.numero, fornecedor:o.fornecedor, numero_tiny:"",
+        data_pedido:o.data_pedido || HOJE_ISO, data_prevista:novos[0].prevista, obs:"Item incluído na OC",
+        itens: novos.map(n=>({c:n.c, qtd:n.qtd, prevista:n.prevista}))});
+      semCad = r.semCadastro || [];
+    }
+  } catch(e){
+    st.gravando = false;
+    st.erro = String(e.message || e);
+    st.erroTit = (passo || e.parcial) ? "Gravou só uma parte." : "Não gravou.";
+    if (passo || e.parcial){
+      /* uma parte entrou: relê para a tela mostrar o que já está na planilha */
+      st.ed = {};
+      st.erro = (passo ? "as alterações nas linhas foram gravadas, mas o item novo não: " : "") + st.erro;
+      await depoisDeGravar();
+    }
+    renderPedidos(); return;
+  }
+  state.ped.oc = null;
+  const reler = await depoisDeGravar();
+  const det = mud.slice(0, 8).map(m=>{
+    const l = m.l || {}, c = m.campos, p = [];
+    if (c.data_prevista) p.push("previsão "+dbr(l.data_prevista)+" → <b>"+dbr(c.data_prevista)+"</b>");
+    if (c.quantidade != null) p.push("quantidade "+nf(l.qOC)+" → <b>"+nf(c.quantidade)+"</b>");
+    if (c.quantidade_nf != null) p.push("recebido <b>"+nf(c.quantidade_nf)+"</b> de "+nf(l.qOC));
+    if (c.status) p.push("status → <b>"+esc(c.status)+"</b>");
+    if (c.obs) p.push("nº do Tiny anotado");
+    return "· "+esc(l.b !== undefined ? nomeLinhaOC(l) : m.rot)+": "+p.join(", ");
+  });
+  if (mud.length > 8) det.push("· e mais "+(mud.length-8));
+  novos.forEach(n=>{ const r = PORCOD[n.c]; det.push("· incluído "+esc(r ? titulo(r.nome) : n.c)+": "+nf(n.qtd)+" un. para "+dbr(n.prevista)); });
+  avisoOC(verbo === "cancelada" ? "OC CANCELADA" : verbo === "recebida" ? "MERCADORIA RECEBIDA" : "OC ATUALIZADA",
+    ['<b>OC '+esc(o.numero)+'</b> · '+esc(o.fornecedor || "sem fornecedor"),
+     det.join("<br>"),
+     reler || (verbo === "recebida"
+       ? "Gravado na aba OC's. A torre parou de contar isso como chegada futura; o saldo sobe quando o Tiny for lido de novo."
+       : "Gravado na aba OC's. A cobertura já foi refeita com o que mudou."),
+     semCad.length ? "Atenção: "+semCad.map(esc).join(", ")+" não está na aba Produtos — a linha entrou, mas o SKU sai 0 até cadastrar lá." : ""]);
+}
+
+/* ---------- OC da planilha: receber ----------
+   Grava na linha: Quantidade NF (soma com o que já veio), NF, Entrega e, quando o item
+   fecha, Status "Entregue". Parcial fica aberto pelo que falta — é assim que a leitura
+   da planilha já entende. */
+function telaReceberOC(){
+  const st = state.ped.oc, o = ocDaTela();
+  const box = document.createElement("div");
+  if (!o) return _ocNaoAchada(box);
+  const abertas = o.linhas.filter(l => !l.fechada);
+  if (!st.ch){ st.ch = {}; abertas.forEach(l=>{ st.ch[l.b] = l.falta; }); }
+  const ch = st.ch;
+  const linhas = abertas.map(l=>{
+    const d = (ch[l.b] || 0) - l.falta;
+    const nota = d === 0 ? '<span class="ok">✓ bateu</span>'
+      : d < 0 ? '<span class="men">⚠ '+nf(-d)+' a menos</span>'
+      : '<span class="mai">＋'+nf(d)+' além do pedido</span>';
+    return '<div class="ritem">'+
+      '<span class="nm"><b>'+esc(nomeLinhaOC(l))+'</b><span class="mono">'+esc(l.sku || "sem SKU na aba Produtos")+'</span></span>'+
+      '<span class="num">'+nf(l.qOC)+'<em>pedido</em></span>'+
+      '<span class="num">'+nf(l.qNF || 0)+'<em>já veio</em></span>'+
+      '<input type="number" min="0" step="1" value="'+(ch[l.b] || 0)+'" data-rch="'+l.b+'" aria-label="chegando agora">'+
+      '<span class="dif">'+nota+'</span>'+
+    '</div>';
+  }).join("");
+  const faltaDepois = abertas.reduce((a,l)=> a + Math.max(0, l.falta - (ch[l.b] || 0)), 0);
+  if (!st.rmodo || (st.rmodo === "parcial" && !faltaDepois) || (st.rmodo === "completo" && faltaDepois))
+    st.rmodo = faltaDepois > 0 ? "parcial" : "completo";
+  const modo = st.rmodo;
+
+  box.innerHTML =
+    '<div class="ordform">'+
+      '<div class="oh"><button class="link" id="r-voltar">← voltar para a OC</button>'+
+        '<h2>Receber OC '+esc(o.numero)+' · '+esc(o.fornecedor || "sem fornecedor")+'</h2></div>'+
+      '<div class="ogrid">'+
+        '<label class="ocampo"><span>NF do fornecedor</span>'+
+          '<input type="text" id="r-nf" value="'+esc(st.nf || "")+'" placeholder="número da nota"></label>'+
+        '<label class="ocampo"><span>Data do recebimento</span>'+
+          '<input type="date" id="r-data" value="'+esc(st.data || HOJE_ISO)+'"></label>'+
+      '</div>'+
+      '<div class="osec"><div class="rot">O que chegou</div>'+linhas+'</div>'+
+      '<div class="rmodo">'+
+        [["completo","Recebimento completo","todos os itens vão para Entregue", !!faltaDepois],
+         ["parcial","Parcial","faltam "+nf(faltaDepois)+" un., a OC segue aberta pelo que falta", !faltaDepois],
+         ["falta","Encerrar com falta","o que não veio não vem mais e para de contar na cobertura", false]]
+        .map(([k,t,d,off])=>'<label class="ropt'+(modo===k?" on":"")+(off?" off":"")+'">'+
+          '<input type="radio" name="rmodo" value="'+k+'"'+(modo===k?" checked":"")+(off?" disabled":"")+'>'+
+          '<span><b>'+t+'</b><em>'+d+'</em></span></label>').join("")+
+      '</div>'+
+      '<div class="faviso" style="margin-top:14px"><span>▲</span><span>'+
+        '<b>A torre não soma estoque.</b> Ao confirmar, ela grava o recebimento na aba OC\'s (Quantidade NF, NF, Entrega e Status), '+
+        'para de contar isto como chegada futura e espera o saldo do Tiny subir na próxima leitura.</span></div>'+
+      (st.erro ? '<div class="oerro" style="margin-top:12px"><b>'+esc(st.erroTit || "Não gravou.")+'</b> '+esc(st.erro)+'</div>' : '')+
+      '<div class="ope"><span class="dir"></span>'+
+        '<button class="btn" id="r-cancel">Cancelar</button>'+
+        '<button class="btn btn-primary" id="r-ok"'+(st.gravando ? ' disabled' : '')+'>'+
+          (st.gravando ? 'Gravando na planilha…' : 'Confirmar recebimento')+'</button></div>'+
+    '</div>';
+
+  setTimeout(()=>{
+    const guarda = ()=>{ st.nf = box.querySelector("#r-nf").value.trim(); st.data = box.querySelector("#r-data").value || HOJE_ISO; };
+    box.querySelectorAll("[data-rch]").forEach(inp=>{
+      inp.onchange = ()=>{ guarda(); ch[+inp.dataset.rch] = Math.max(0, Math.floor(Number(inp.value) || 0));
+        st.rmodo = null; renderPedidos(); };
+    });
+    box.querySelectorAll('input[name="rmodo"]').forEach(r=>{ r.onchange = ()=>{ guarda(); st.rmodo = r.value; renderPedidos(); }; });
+    const volta = ()=>{ st.modo = "editar"; st.ch = null; st.rmodo = null; st.erro = null; renderPedidos(); };
+    box.querySelector("#r-voltar").onclick = volta;
+    box.querySelector("#r-cancel").onclick = volta;
+    box.querySelector("#r-ok").onclick = ()=>{
+      guarda();
+      const data = st.data, nfTxt = st.nf;
+      const mud = [];
+      abertas.forEach(l=>{
+        const c = ch[l.b] || 0, tot = (l.qNF || 0) + c, campos = {};
+        if (c > 0){
+          campos.quantidade_nf = tot; campos.data_entrega = data;
+          if (nfTxt){ const ant = String(l.nf ?? "").trim(); campos.nf = ant && ant !== nfTxt ? ant + " / " + nfTxt : nfTxt; }
+        }
+        if (c > 0 && tot >= l.qOC) campos.status = "Entregue";
+        else if (st.rmodo === "falta") campos.status = tot > 0 ? "Entregue" : "Cancelado";
+        if (Object.keys(campos).length) mud.push({b:l.b, fp:l.fp, rot:"OC "+o.numero+" · "+nomeLinhaOC(l), campos, l});
+      });
+      if (!mud.length){ st.erro = "nada para gravar: nenhuma quantidade chegando."; st.erroTit = null; renderPedidos(); return; }
+      gravarOC(o, mud, [], "recebida");
+    };
+  }, 0);
+  return box;
+}
+
 /* ---------- o formulário da ordem de compra ----------
    Sem valor, sem frete, sem pagamento: a ordem existe para a cobertura saber que
    tem mercadoria a caminho. O que ela precisa é fornecedor, item, quantidade e
@@ -3392,7 +3796,7 @@ function renderPedidos(){
 function abrirFormOC(ordem){
   state.ped.form = ordem ? JSON.parse(JSON.stringify(ordem)) : {
     id: "ord_" + Date.now().toString(36),
-    tipo: "compra", numero: proximoNumero("compra"), numero_tiny: "",
+    tipo: "compra", numero: proximoNumeroOC(), numero_tiny: "",
     fornecedor: "", itens: [], obs: "",
     data_pedido: HOJE_ISO, data_prevista: maisDias(HOJE_ISO, DATA.leadtime),
     status: "aberta", por: USUARIO, em: HOJE_ISO
@@ -3434,8 +3838,9 @@ function telaOrdem(){
         '<h2>'+(nova?"Nova ordem de compra":"Ordem "+esc(o.numero))+'</h2></div>'+
       '<div class="ogrid">'+
         '<label class="ocampo grande"><span>Fornecedor</span><div id="o-forn"></div></label>'+
-        '<label class="ocampo"><span>Nº da ordem</span>'+
-          '<input type="text" value="'+esc(o.numero)+'" id="o-num"></label>'+
+        '<label class="ocampo"><span>Nº da OC</span>'+
+          '<input type="text" value="'+esc(o.numero)+'" id="o-num">'+
+          (nova ? '<em>sugerido: último nº da planilha + 1</em>' : '')+'</label>'+
         '<label class="ocampo"><span>Nº no Tiny</span>'+
           '<input type="text" value="'+esc(o.numero_tiny||"")+'" id="o-tiny" placeholder="preencher ao lançar lá"></label>'+
       '</div>'+
@@ -3453,12 +3858,13 @@ function telaOrdem(){
       '</div>'+
       '<label class="ocampo grande"><span>Observações</span>'+
         '<textarea id="o-obs" rows="2">'+esc(o.obs||"")+'</textarea></label>'+
+      '<div class="oerro" id="o-erro" hidden></div>'+
       '<div class="ope">'+
         (nova ? '' : '<button class="btn" id="o-cancelar">Cancelar esta ordem</button>'+
                      '<button class="btn" id="o-excluir">Excluir</button>')+
         '<span class="dir">'+(o.itens||[]).length+' item'+((o.itens||[]).length===1?'':'ns')+
           ' · <b>'+nf(faltaDe(o))+'</b> un.</span>'+
-        '<button class="btn btn-primary" id="o-salvar">'+(nova?"Registrar ordem":"Salvar")+'</button>'+
+        '<button class="btn btn-primary" id="o-salvar">'+(nova?"Gravar na planilha":"Mandar para a planilha")+'</button>'+
       '</div>'+
     '</div>';
 
@@ -3514,18 +3920,41 @@ function ligarFormOC(box){
   if (v) v.onclick = ()=>{ state.ped.form = null; renderPedidos(); };
   ligarApagar(box, o, "o-cancelar", "o-excluir");
   const jaEra = !!ORDENS[o.id];
-  box.querySelector("#o-salvar").onclick = ()=>{
+  box.querySelector("#o-salvar").onclick = async ()=>{
     o.numero = box.querySelector("#o-num").value.trim() || o.numero;
     o.numero_tiny = box.querySelector("#o-tiny").value.trim();
     o.data_pedido = box.querySelector("#o-dped").value || HOJE_ISO;
     o.data_prevista = box.querySelector("#o-dprev").value || o.data_prevista;
     o.obs = box.querySelector("#o-obs").value.trim();
     o.por = USUARIO; o.em = HOJE_ISO;
-    if (!o.itens.length || !o.data_prevista) return;
-    ORDENS[o.id] = o; gravarOrdem(o.id);
+    const err = box.querySelector("#o-erro");
+    const falha = msg => { if (err){ err.hidden = false; err.innerHTML = "<b>Não gravou.</b> " + esc(msg); } };
+    if (!String(o.fornecedor || "").trim()) return falha("escolha o fornecedor — sem ele a linha entra na planilha sem Origem.");
+    if (!o.itens.length) return falha("inclua pelo menos um item.");
+    if (!o.data_prevista) return falha("preencha a data prevista de chegada.");
+    if (!AO_VIVO || !account) return falha("entre com a Microsoft e clique em Atualizar antes — a OC é gravada na planilha do SharePoint.");
+    const num = String(o.numero || "").trim().toUpperCase();
+    if (!num) return falha("preencha o nº da OC.");
+    const existe = gruposOC().find(g => String(g.numero || "").trim().toUpperCase() === num);
+    if (existe) return falha("já existe a OC " + o.numero + " na planilha (" + (existe.fornecedor || "sem fornecedor") +
+      "). Para incluir itens nela, abra essa OC na lista; para uma OC nova, use outro número.");
+    const btn = box.querySelector("#o-salvar");
+    btn.disabled = true; btn.textContent = "Gravando na planilha…";
+    let r;
+    try { r = await escreverOCPlanilha(o); }
+    catch(e){ btn.disabled = false; btn.textContent = jaEra ? "Mandar para a planilha" : "Gravar na planilha";
+              return falha(String(e.message || e)); }
+    /* compra antiga do livro local: agora mora na planilha, sai daqui */
+    if (jaEra){ delete ORDENS[o.id]; salvarOrdens(); apagarOrdemDb(o.id); }
     state.ped.form = null; state.sel.clear();
-    explodir(); render();
-    if (!jaEra){ confirmaOrdem(o, "registrada"); mandarOCPlanilha(o); }
+    const reler = await depoisDeGravar();
+    const n = (o.itens || []).length;
+    avisoOC("ORDEM DE COMPRA ABERTA", [
+      "<b>OC " + esc(o.numero) + "</b> · " + esc(o.fornecedor || "sem fornecedor") + " · " + n + " item" + (n === 1 ? "" : "ns"),
+      "Gravada na aba <b>OC's</b> da planilha, prevista para <b>" + dbr(o.data_prevista) + "</b>. " +
+        (reler || "Já conta na cobertura dos itens."),
+      (r.semCadastro || []).length ? "Atenção: " + r.semCadastro.map(esc).join(", ") +
+        " não está na aba Produtos — a linha entrou, mas o SKU sai 0 até cadastrar lá." : ""]);
   };
 }
 
@@ -4471,67 +4900,119 @@ async function resolveSiteId(token){
   const r = await graphFetch(GRAPH_BASE + "/sites/" + SITE_HOSTNAME + ":/sites/" + SITE_PATH, token);
   return (await r.json()).id;
 }
+/* ---------- aba OC's: colunas, célula e impressão digital da linha ---------- */
+/* nomes reais da aba OC's primeiro; os antigos ficam como reserva */
+const OC_ALIAS = {
+  sku:          ["sku","codigo","codigo (sku)"],
+  numero:       ["oc / invoice","oc/invoice","oc","numero"],
+  fornecedor:   ["fornecedor"],
+  descricao:    ["descricao","produto_nome","produto"],
+  origem:       ["origem"],
+  leadtime:     ["leadtime"],
+  quantidade:   ["quantidade oc","quantidade"],
+  nf:           ["nf"],
+  quantidade_nf:["quantidade nf"],
+  data_prevista:["previsao/eta","previsao / eta","eta","data_prevista"],
+  data_coleta:  ["coleta/etd","coleta / etd","etd"],
+  data_pedido:  ["data","data_pedido"],
+  data_entrega: ["entrega","data_entrega"],
+  status:       ["status"],
+  obs:          ["observacoes","observacao","obs"],
+};
+/* cabeçalho normalizado: minúsculo, sem acento, espaços simples, sem os dois-pontos do fim */
+const _normCab = h => String(h||"").normalize("NFD").replace(/[̀-ͯ]/g,"")
+                   .toLowerCase().replace(/\s+/g," ").trim().replace(/\s*:+$/,"").trim();
+function _idxOC(cab){
+  const H = {}; (cab||[]).forEach((h,i)=>{ h = _normCab(h); if (h && H[h] === undefined) H[h] = i; });
+  const idx = {};
+  Object.entries(OC_ALIAS).forEach(([k, alts])=>{
+    const a = alts.find(x => H[_normCab(x)] !== undefined); idx[k] = a === undefined ? undefined : H[_normCab(a)]; });
+  return idx;
+}
+/* data da célula: serial do Excel (API do workbook) ou Date/texto (arquivo baixado) */
+function _isoCel(v){
+  if (typeof v === "number" && v > 20000 && v < 80000)
+    return _isoDate(new Date(Math.round((v - 25569) * 86400000) + 12*3600000));
+  const d = _toDate(v); return d ? _isoDate(d) : null;
+}
+/* impressão digital da linha: antes de gravar, a torre relê a tabela e confere se a
+   linha ainda é a mesma que estava na tela. Se alguém mexeu nela, não grava. */
+function _fpOC(r, idx){
+  const c = k => (!r || idx[k] === undefined) ? "" : r[idx[k]];
+  const t = v => String(v ?? "").trim().toUpperCase();
+  return [t(c("numero")), t(c("fornecedor")), t(c("descricao")), _toNum(c("quantidade")),
+          _toNum(c("quantidade_nf")), _isoCel(c("data_prevista")) || "", t(c("status"))].join("|");
+}
+const chaveOC = (numero, fornecedor) => String(numero ?? "").trim() + "|" + String(fornecedor ?? "").trim();
+function _colNum(letras){ let n = 0; for (const ch of letras) n = n*26 + (ch.charCodeAt(0) - 64); return n - 1; }
+function _colLetra(n){ let s = ""; n++; while (n > 0){ const m = (n-1) % 26; s = String.fromCharCode(65+m) + s; n = Math.floor((n-1)/26); } return s; }
+function _wbUrl(){
+  return GRAPH_BASE + "/sites/" + siteIdCache + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/workbook";
+}
+/* a Tabela1 inteira pela API do workbook — enxerga na hora o que acabou de ser gravado.
+   lin0/col0: onde a tabela começa na aba (linha do cabeçalho e primeira coluna). */
+async function lerTabelaOC(token){
+  const r = await graphJson(_wbUrl() + "/tables/" + TABELA_OC + "/range?$select=address,values", token);
+  const fim = String(r.address || "").split("!").pop();
+  const m = /^\$?([A-Z]+)\$?(\d+)/.exec(fim);
+  return { valores: r.values || [], col0: m ? _colNum(m[1]) : 0, lin0: m ? +m[2] : 1 };
+}
 async function ocListOpen(token, siteId){
-  const url = GRAPH_BASE + "/sites/" + siteId + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/content";
-  const buf = await (await graphFetch(url, token)).arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array", cellDates: true });
-  if (!wb.SheetNames.includes(SHEET_NAME))
-    throw new Error("Aba '" + SHEET_NAME + "' não encontrada. Abas: " + wb.SheetNames.join(", "));
-  const rows = XLSX.utils.sheet_to_json(wb.Sheets[SHEET_NAME], { header: 1, defval: null });
-  /* cabeçalho normalizado: minúsculo, sem acento, espaços simples */
-  const norm = h => String(h||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"")
-                     .toLowerCase().replace(/\s+/g," ").trim().replace(/\s*:+$/,"").trim();
-  const H = {}; (rows[0]||[]).forEach((h,i)=>{ h = norm(h); if (h && H[h] === undefined) H[h] = i; });
-  /* nomes reais da aba OC's primeiro; os antigos ficam como reserva */
-  const ALIAS = {
-    sku:          ["sku","codigo","codigo (sku)"],
-    numero:       ["oc / invoice","oc/invoice","oc","numero"],
-    fornecedor:   ["fornecedor"],
-    descricao:    ["descricao","produto_nome","produto"],
-    origem:       ["origem"],
-    leadtime:     ["leadtime"],
-    quantidade:   ["quantidade oc","quantidade"],
-    nf:           ["nf"],
-    quantidade_nf:["quantidade nf"],
-    data_prevista:["previsao/eta","previsao / eta","eta","data_prevista"],
-    data_coleta:  ["coleta/etd","coleta / etd","etd"],
-    data_pedido:  ["data","data_pedido"],
-    data_entrega: ["entrega","data_entrega"],
-    status:       ["status"],
-  };
-  const idx = {}; Object.entries(ALIAS).forEach(([k, alts])=>{
-    const a = alts.find(x => H[norm(x)] !== undefined); idx[k] = a === undefined ? undefined : H[norm(a)]; });
+  if (!siteIdCache) siteIdCache = siteId;
+  let rows;
+  try { rows = (await lerTabelaOC(token)).valores; }
+  catch(e){
+    /* reserva: baixa o arquivo inteiro e lê a aba com o SheetJS */
+    const url = GRAPH_BASE + "/sites/" + siteId + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/content";
+    const buf = await (await graphFetch(url, token)).arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    if (!wb.SheetNames.includes(SHEET_NAME))
+      throw new Error("Aba '" + SHEET_NAME + "' não encontrada. Abas: " + wb.SheetNames.join(", "));
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[SHEET_NAME], { header: 1, defval: null, blankrows: true });
+  }
+  const idx = _idxOC(rows[0]);
   if (idx.sku === undefined || idx.quantidade === undefined || idx.data_prevista === undefined)
     throw new Error("Aba '" + SHEET_NAME + "': não achei as colunas SKU, Quantidade OC e Previsão/ETA. Cabeçalho lido: " +
                     (rows[0]||[]).filter(Boolean).join(" · "));
   const col = (r, k) => idx[k] === undefined ? null : (r[idx[k]] ?? null);
-  const iso = v => {
-    if (typeof v === "number" && v > 20000 && v < 80000)          /* data serial do Excel */
-      return _isoDate(new Date(Math.round((v - 25569) * 86400000) + 12*3600000));
-    const d = _toDate(v); return d ? _isoDate(d) : null;
-  };
+  const iso = _isoCel;
   const FECHADA = /entreg|receb|finaliz|conclu|cancel/i;
-  const out = [], semSku = [];
+  const out = [], semSku = [], todas = [];
   for (let i = 1; i < rows.length; i++){
     const r = rows[i];
     if (!r || r.every(v => v === null || v === "")) continue;
     const sku = col(r,"sku");
     const skuTxt = sku === null ? "" : String(sku).trim();
     /* SKU vem de um PROCX na planilha: 0 ou #N/D = descrição que não achou na aba Produtos */
-    if (!skuTxt || skuTxt === "0" || /^#/.test(skuTxt)){
-      if (col(r,"descricao") || col(r,"quantidade")) semSku.push({
-        oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: String(col(r,"status")||"").trim()});
-      continue;
-    }
+    const temSku = !(!skuTxt || skuTxt === "0" || /^#/.test(skuTxt));
     const qOC = _toNum(col(r,"quantidade")), qNF = _toNum(col(r,"quantidade_nf"));
     const entrega = iso(col(r,"data_entrega"));
     const stTxt = String(col(r,"status") || "").trim();
     const fechada = FECHADA.test(stTxt) || (!!entrega && !(qNF > 0 && qNF < qOC));
+    const numero = col(r,"numero") !== null ? String(col(r,"numero")).trim() : null;
+    const fornecedor = col(r,"fornecedor");
+    const key = chaveOC(numero, fornecedor);
+    /* toda linha da aba, com ou sem SKU: é a lista que a aba Pedidos mostra e edita.
+       b = posição da linha no corpo da Tabela1 (0 = logo abaixo do cabeçalho) */
+    todas.push({ b: i - 1, fp: _fpOC(r, idx), key, numero,
+      fornecedor: fornecedor === null ? "" : String(fornecedor).trim(),
+      descricao: String(col(r,"descricao") || "").trim(), sku: temSku ? skuTxt : null,
+      qOC, qNF, nf: col(r,"nf"), obs: col(r,"obs"),
+      data_pedido: iso(col(r,"data_pedido")), data_prevista: iso(col(r,"data_prevista")), data_entrega: entrega,
+      status_planilha: stTxt, fechada, cancelada: /cancel/i.test(stTxt),
+      falta: fechada ? 0 : Math.max(0, qOC - (qNF > 0 ? qNF : 0)) });
+    if (!temSku){
+      if (col(r,"descricao") || col(r,"quantidade")) semSku.push({
+        oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: stTxt});
+      continue;
+    }
     out.push({
       sku: skuTxt,
-      numero: col(r,"numero") !== null ? String(col(r,"numero")).trim() : null,
+      numero,
+      key,
+      linha: i - 1,
       produto_nome: col(r,"descricao"),
-      fornecedor: col(r,"fornecedor"),
+      fornecedor: fornecedor,
       /* entrega parcial: o que falta chegar é a OC menos o que já veio na NF */
       quantidade: fechada ? qOC : Math.max(0, qOC - (qNF > 0 ? qNF : 0)),
       quantidade_oc: qOC, quantidade_nf: qNF || null, nf: col(r,"nf"),
@@ -4545,7 +5026,7 @@ async function ocListOpen(token, siteId){
       status_planilha: stTxt || null,
     });
   }
-  out.semSku = semSku;
+  out.semSku = semSku; out.todas = todas;
   return out;
 }
 /* ---------- escreve a OC na planilha de BI (aba OC's, tabela Tabela1) ----------
@@ -4590,7 +5071,8 @@ async function escreverOCPlanilha(o){
     L[5]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!C:C,0)"; /* SKU */
     L[6]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!E:E,0)"; /* Leadtime */
     L[7]  = it.qtd || 0;                                             /* Quantidade OC */
-    L[10] = _serialExcel(o.data_prevista);                           /* Previsao/ETA */
+    if (it.recebido) L[9] = it.recebido;                             /* Quantidade NF: o que ja veio */
+    L[10] = _serialExcel(it.prevista || o.data_prevista);            /* Previsao/ETA */
     L[13] = "=[@[Entrega:]]-[@[Previsão/ETA:]]";                     /* atraso */
     L[14] = '=IF([@[Status:]]="Entregue",[@[Entrega:]]-[@[Data:]],0)'; /* Leadtime real */
     L[15] = "Pendente";                                              /* Status */
@@ -4600,6 +5082,115 @@ async function escreverOCPlanilha(o){
   if (!linhas.length) return { semCadastro };
   await graphJson(wb + "/tables/" + TABELA_OC + "/rows/add", token, "POST", { index: null, values: linhas });
   return { semCadastro };
+}
+/* ---------- grava em linhas que já existem na aba OC's ----------
+   mudancas: [{b, fp, rot, campos:{quantidade, data_prevista, status, data_entrega, nf, quantidade_nf}}]
+   Primeiro acha TODAS as linhas (pela posição e, se a posição não bate, pela impressão
+   digital); só depois grava. Grava célula a célula, então as fórmulas das outras colunas
+   (Origem, SKU, Leadtime, atraso, Leadtime real) ficam intactas. */
+async function gravarNaPlanilhaOC(mudancas){
+  if (!account || !msalInstance) throw new Error("sem login da Microsoft — entre de novo e tente outra vez");
+  const token = await getGraphToken();
+  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+  const t = await lerTabelaOC(token);
+  const corpo = t.valores.slice(1), idx = _idxOC(t.valores[0]);
+  const plano = [];
+  for (const m of mudancas){
+    let b = m.b;
+    if (_fpOC(corpo[b], idx) !== m.fp){
+      const achou = [];
+      corpo.forEach((r, j)=>{ if (_fpOC(r, idx) === m.fp) achou.push(j); });
+      if (achou.length !== 1) throw new Error("a linha de " + m.rot + " mudou na planilha depois da última leitura " +
+        "(alguém editou, apagou ou reordenou). Nada foi gravado: clique em Atualizar e refaça a alteração.");
+      b = achou[0];
+    }
+    const lin = t.lin0 + 1 + b;
+    for (const [k, v] of Object.entries(m.campos)){
+      if (idx[k] === undefined) throw new Error("não achei a coluna de " + k + " na aba OC's. Nada foi gravado.");
+      plano.push({ end: _colLetra(t.col0 + idx[k]) + lin, v: k.startsWith("data_") ? _serialExcel(v) : v });
+    }
+  }
+  if (!plano.length) return 0;
+  const ws = await graphJson(_wbUrl() + "/tables/" + TABELA_OC + "/worksheet?$select=id,name", token);
+  const bases = [_wbUrl() + "/worksheets/" + encodeURIComponent(ws.id),
+                 _wbUrl() + "/worksheets('" + encodeURIComponent(String(ws.name).replace(/'/g, "''")) + "')"];
+  let base = null, feitas = 0;
+  try {
+    for (const p of plano){
+      const corpoReq = { values: [[p.v]] };
+      if (!base){
+        let erro = null;
+        for (const b0 of bases){
+          try { await graphJson(b0 + "/range(address='" + p.end + "')", token, "PATCH", corpoReq); base = b0; break; }
+          catch(e){ erro = e; if (!/HTTP 40[04]/.test(String(e.message))) break; }
+        }
+        if (!base) throw erro;
+      } else {
+        await graphJson(base + "/range(address='" + p.end + "')", token, "PATCH", corpoReq);
+      }
+      feitas++;
+    }
+  } catch(e){
+    const err = new Error((feitas ? "gravei " + feitas + " de " + plano.length + " células e parei: " : "") + (e.message || e));
+    err.parcial = feitas; throw err;
+  }
+  return feitas;
+}
+
+/* depois de gravar: relê só a planilha e refaz a conta com o Kondado da última leitura */
+let ULTIMO_K = null;
+async function recarregarOCs(){
+  if (!ULTIMO_K){ await atualizar(); return; }
+  const token = await getGraphToken();
+  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+  const ocs = await ocListOpen(token, siteIdCache);
+  pintaFonte(aplicarAoVivo(ULTIMO_K, ocs), ocs);
+  render();
+}
+/* devolve "" se releu, ou um aviso pronto (HTML) se a gravação foi mas a releitura não */
+async function depoisDeGravar(){
+  try { await recarregarOCs(); return ""; }
+  catch(e){ return "Gravado na planilha, mas não consegui reler agora (" + esc(String(e.message||e)) +
+                   "). Clique em <b>Atualizar</b> para a conta pegar a mudança."; }
+}
+
+/* as linhas da aba OC's agrupadas em OCs: mesmo nº e mesmo fornecedor */
+function gruposOC(){
+  const g = {};
+  ((DATA.ocs && DATA.ocs.todas) || []).forEach(l=>{
+    const o = g[l.key] || (g[l.key] = {key:l.key, numero:l.numero || "", fornecedor:l.fornecedor || "",
+                                       linhas:[], data_pedido:null});
+    o.linhas.push(l);
+    if (l.data_pedido && (!o.data_pedido || l.data_pedido < o.data_pedido)) o.data_pedido = l.data_pedido;
+  });
+  return Object.values(g).map(o=>{
+    const ab = o.linhas.filter(l => !l.fechada);
+    o.aberta = ab.length > 0;
+    o.falta = ab.reduce((a,l)=> a + l.falta, 0);
+    o.prevista = ab.map(l => l.data_prevista).filter(Boolean).sort()[0] || null;
+    o.entrega = o.linhas.map(l => l.data_entrega).filter(Boolean).sort().pop() || null;
+    o.situacao = o.aberta ? "aberta" : o.linhas.every(l => l.cancelada) ? "cancelada" : "entregue";
+    o.status_txt = [...new Set(ab.map(l => l.status_planilha).filter(Boolean))].join(" · ");
+    /* OC lançada pela torre sem o nº do Tiny nas observações: é a lista do que falta lançar no ERP */
+    o.semTiny = o.situacao !== "cancelada" && o.linhas.some(l => ocSemTiny(l));
+    return o;
+  });
+}
+function ocSemTiny(l){
+  const ob = String(l.obs || "");
+  return /lan[çc]ada pela torre/i.test(ob) && !/\bTiny\s+\S/i.test(ob);
+}
+/* nº da próxima OC: o maior nº da planilha + 1 (a planilha numera 86, 103, 235…) */
+function proximoNumeroOC(){
+  let n = 0;
+  ((DATA.ocs && DATA.ocs.todas) || []).forEach(l=>{
+    const m = /^\s*(\d+)\s*$/.exec(String(l.numero || "")); if (m) n = Math.max(n, +m[1]); });
+  return n ? String(n + 1) : proximoNumero("compra");
+}
+function avisoOC(tit, linhas){
+  document.getElementById("conf-t").textContent = tit;
+  document.getElementById("conf-s").innerHTML = linhas.filter(Boolean).join("<br><br>");
+  document.getElementById("confirma").hidden = false;
 }
 async function mandarOCPlanilha(o){
   const cs = document.getElementById("conf-s");
@@ -4761,6 +5352,20 @@ async function initLogin(){
 }
 
 /* ---------- Atualizar: Kondado + SharePoint ---------- */
+function pintaFonte(res, ocs){
+  const hm = new Date().toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
+  document.getElementById("stamp").textContent = "Atualizado " + dbr(DATA.gerado_em) + " às " + hm + " · Kondado + SharePoint" +
+    (NF_ATE ? " · NF até " + dbr(NF_ATE).slice(0,5) : " · data da última NF não informada");
+  document.getElementById("nota-fonte").innerHTML =
+    "<b>Dado ao vivo.</b> Estoque, cadastro e venda (nota fiscal emitida) vêm do <b>Tiny via Kondado</b>; " +
+    "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>" + esc(DRIVE_ITEM_PATH.split("/").pop()) + "</b> no SharePoint (AREA_BI) " +
+    "e são editados na aba Pedidos. " +
+    res.atualizados + " itens atualizados · " + ocs.filter(ocAberta).length + " OCs em aberto" +
+    (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + "." +
+    (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
+      return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
+        ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
+}
 async function atualizar(){
   const c = document.getElementById("carga"), btn = document.getElementById("btn-atualizar");
   c.hidden = false; btn.disabled = true;
@@ -4779,17 +5384,8 @@ async function atualizar(){
     if (faltam.length) throw new Error("o Worker não mandou " + faltam.join(", ") +
       ". Sem isso a conta sairia com zero no lugar do dado, então nada foi atualizado e a tela segue com a leitura anterior.");
     const res = aplicarAoVivo(k, ocs);
-    const hm = new Date().toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
-    document.getElementById("stamp").textContent = "Atualizado " + dbr(DATA.gerado_em) + " às " + hm + " · Kondado + SharePoint" +
-      (NF_ATE ? " · NF até " + dbr(NF_ATE).slice(0,5) : " · data da última NF não informada");
-    document.getElementById("nota-fonte").innerHTML =
-      "<b>Dado ao vivo.</b> Estoque, cadastro e venda (nota fiscal emitida) vêm do <b>Tiny via Kondado</b>; " +
-      "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>" + esc(DRIVE_ITEM_PATH.split("/").pop()) + "</b> no SharePoint (AREA_BI). " +
-      res.atualizados + " itens atualizados · " + ocs.filter(ocAberta).length + " OCs em aberto" +
-      (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + "." +
-      (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
-        return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
-          ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
+    ULTIMO_K = k;
+    pintaFonte(res, ocs);
     render();
   } catch(e){
     alert("Erro ao atualizar: " + e.message);
