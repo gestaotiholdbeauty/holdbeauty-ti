@@ -285,6 +285,9 @@ th button:focus-visible,tbody tr:focus-visible,.link:focus-visible{outline:2px s
 .kpi .arrow{font-size:17px;vertical-align:2px;color:var(--text);font-family:var(--f-body)}
 
 .tablewrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:auto}
+/* no computador o cabeçalho da tabela acompanha a rolagem da página: clip recorta os cantos
+   sem virar caixa de rolagem, que era o que fazia o cabeçalho sumir */
+@media (min-width:900px){ .tablewrap{overflow:clip} }
 table{border-collapse:collapse;width:100%;font-size:12.8px}
 thead th{position:sticky;top:0;z-index:2;background:var(--head-bg);color:var(--head-fg);
   font-weight:500;font-size:10.6px;letter-spacing:.05em;text-transform:uppercase;text-align:right;
@@ -853,6 +856,24 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
 .sdb.ok{border-color:var(--green-line);background:var(--green-soft);color:var(--green)}
 .sdb.erro{border-color:var(--red-line);background:var(--red-soft);color:var(--red)}
 .sdb[hidden]{display:none}
+:root[data-theme="dark"]{color-scheme:dark}
+:root[data-theme="light"]{color-scheme:light}
+/* gráfico: mês com ruptura registrada */
+.gbar.rup{box-shadow:inset 0 3px 0 var(--red);outline:1.5px dashed var(--red);outline-offset:1px}
+.gleg .sw-rup{display:inline-block;width:10px;height:10px;border:1.5px dashed var(--red);border-radius:2px;margin-right:4px;vertical-align:-1px}
+/* busca e ordem na lista de fichas e de pedidos */
+.fbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}
+.fbar input{flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border-strong);border-radius:7px;
+  padding:7px 10px;font:inherit;font-size:12.6px;color:var(--text)}
+.fbar .chip.on{background:var(--navy);border-color:var(--navy);color:var(--creme)}
+:root[data-theme="dark"] .fbar .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.fmont{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin:10px 0 2px}
+.fmont input{width:72px;background:var(--bg);border:1px solid var(--border-strong);border-radius:6px;padding:5px 8px;
+  font:inherit;font-size:12.6px;color:var(--text);text-align:right}
+.olin-vinc{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:0 0 10px;border-bottom:1px solid var(--border);
+  font-size:11.6px;color:var(--amber)}
+.olin-vinc>div{flex:1;min-width:220px}
+.olin-vinc b{font-weight:600}
 .rot-loc{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);margin:20px 0 8px}
 @media (max-width:700px){
   .olin{grid-template-columns:1fr 1fr 30px}
@@ -1433,7 +1454,7 @@ function rupturasDe(s){
   const r = temReg(s.codigo);
   const manuais = (r && r.rupturas) ? r.rupturas : [];
   const auto = s.em_ruptura
-    ? [{ini: DATA.gerado_em, fim: null, motivo: (r && r.motivoAuto) || "",
+    ? [{ini: (r && r.rupAutoIni) || DATA.gerado_em, fim: null, motivo: (r && r.motivoAuto) || "",
         auto: true, negativo: s.saldo_negativo}]
     : [];
   return auto.concat(manuais);
@@ -2693,8 +2714,39 @@ function janela12(){           /* 12 colunas terminando no mês atual */
   }
   return out;
 }
+/* matéria-prima não é vendida: o que o gráfico mostra é consumo (venda dos produtos que a usam
+   × quantidade na ficha), somado à venda avulsa quando ela também é vendida sozinha */
+function modoGrafico(s){
+  const expl = (s.vd_explodida || 0) > 0, propria = (s.vd_propria || 0) > 0;
+  if (expl && propria) return "misto";
+  if (expl || state.escopo === "insumo") return "consumo";
+  return "venda";
+}
+function tituloGrafico(s){
+  const m = modoGrafico(s);
+  return m === "misto" ? "Venda + consumo nas fichas, por mês"
+       : m === "consumo" ? "Consumo mensal · explodido das fichas"
+       : "Venda mensal por nota fiscal";
+}
+/* meses tocados por ruptura (a detectada pelo saldo e as registradas à mão) */
+function mesesRuptura(s){
+  const out = {};
+  rupturasDe(s).forEach(x=>{
+    if (!x.ini) return;
+    let [a, m] = x.ini.slice(0,7).split("-").map(Number);
+    const fim = (x.fim || DATA.gerado_em).slice(0,7);
+    for (let n = 0; n < 60; n++){
+      const k = a + "-" + String(m).padStart(2,"0");
+      if (k > fim) break;
+      out[k] = 1;
+      if (++m > 12){ m = 1; a++; }
+    }
+  });
+  return out;
+}
 function grafico(s){
   const cols = janela12();
+  const rupM = mesesRuptura(s);
   const vals = cols.map(c => s.serie[c.key] ?? null);
   const max = Math.max(1, ...vals.filter(v => v !== null), s.media_mes);
   const alt = v => Math.max(2, Math.round((v / max) * 88));
@@ -2717,20 +2769,25 @@ function grafico(s){
     const fundo = parcial
       ? "repeating-linear-gradient(135deg,"+cor+" 0 3px,var(--surface) 3px 6px)"
       : cor;
+    const rup = !!rupM[c.key];
     return '<div class="gcol'+vira+'"><span class="gv">'+nf(v)+'</span>'+
-      '<span class="gbar" style="height:'+alt(v)+'%;background:'+fundo+'" '+
-      'title="'+c.rot+'/'+String(c.ano).slice(2)+': '+nf(v)+' un.'+(parcial?" (mês incompleto)":"")+'"></span>'+
+      '<span class="gbar'+(rup?' rup':'')+'" style="height:'+alt(v)+'%;background:'+fundo+'" '+
+      'title="'+c.rot+'/'+String(c.ano).slice(2)+': '+nf(v)+' un.'+(parcial?" (mês incompleto)":"")+
+      (rup?" · teve ruptura: a venda deste mês está abaixo do que seria":"")+'"></span>'+
       '<span class="gm">'+rot+'</span></div>';
   }).join("");
   const legAnos = anosNaBase.map(a =>
     '<span><i style="background:'+corAno(a)+'"></i><b>'+a+'</b></span>').join("");
   return '<div class="graf">'+
-    '<div class="gplot"><span class="gref" style="bottom:'+refY+'%"><i>'+((s.vd_explodida||0) > 0 ? 'demanda/mês' : 'média 3m')+' · '+nf(s.media_mes)+'</i></span>'+
+    '<div class="gplot"><span class="gref" style="bottom:'+refY+'%"><i>'+(modoGrafico(s) !== "venda" ? 'demanda/mês' : 'média 3m')+' · '+nf(s.media_mes)+'</i></span>'+
     barras+'</div>'+
     '<div class="gleg">'+legAnos+
     '<span><i style="background:repeating-linear-gradient(135deg,var(--ano-0) 0 3px,var(--surface) 3px 6px)"></i>mês incompleto</span>'+
     '<span><i class="sw-sem"></i>sem base no Kondado</span>'+
-    '<span>venda por NF emitida</span></div></div>';
+    (Object.keys(rupM).length ? '<span><i class="sw-rup"></i>mês com ruptura</span>' : '')+
+    '<span>'+(modoGrafico(s) === "venda" ? 'venda por NF emitida'
+      : modoGrafico(s) === "consumo" ? 'consumo = venda de quem usa × qtd. na ficha homologada'
+      : 'venda avulsa por NF + consumo nas fichas homologadas')+'</span></div></div>';
 }
 /* Registro de acontecimentos do produto: o que já aconteceu (pedido feito,
    previsão vencida, chegada, ruptura) e o que está projetado (pedir até,
@@ -2982,7 +3039,7 @@ function abrirSku(s0){
           ? '<span class="dim">→ leadtime efetivo <b>'+s.leadtime+' d</b></span>'
           : (temLead ? '<button class="link" id="lead-reset">voltar ao padrão de '+DATA.leadtime+' d</button>' : ''))+
       '</div></div></div>'+
-    '<div class="dsec"><h3>'+icon("curva-abc",14)+'Venda mensal por nota fiscal</h3>'+grafico(s0)+'</div>'+
+    '<div class="dsec"><h3>'+icon("curva-abc",14)+tituloGrafico(s0)+'</h3>'+grafico(s0)+'</div>'+
     '<div class="dsec"><h3>'+icon("pedir-ate",14)+'Linha do tempo</h3>'+linhaDoTempo(s)+'</div>'+
     '<div class="dsec"><h3>'+icon("situacao",14)+'Por que este status</h3><ul>'+explicacao(s).map(l=>"<li>"+esc(l)+"</li>").join("")+'</ul></div>'+
     '<div class="dsec"><h3>'+icon("pedido",14)+'Pedidos de compra deste SKU</h3>'+
@@ -3520,10 +3577,15 @@ function renderPedidos(){
   if (!["abertas","fechadas","semtiny","todas"].includes(st.sit)) st.sit = "abertas";
   const filtra = (arr, ab, ti) => st.sit === "abertas" ? arr.filter(ab) : st.sit === "fechadas" ? arr.filter(x => !ab(x))
                                 : st.sit === "semtiny" ? arr.filter(ti) : arr.slice();
-  const gVis = filtra(grupos, abG, tiG).sort(st.sit === "abertas"
+  const bq = String(st.busca || "").trim().toLowerCase();
+  const bate = t => !bq || String(t).toLowerCase().includes(bq);
+  const bateG = o => bate([o.numero, o.fornecedor, o.status_txt].concat(o.linhas.map(l => [l.sku, l.descricao, nomeLinhaOC(l)].join(" "))).join(" "));
+  const bateL = o => bate([o.numero, o.numero_tiny, o.fornecedor, o.produto, (PORCOD[o.produto]||{}).nome]
+    .concat((o.itens||[]).map(it => it.c + " " + ((PORCOD[it.c]||{}).nome || ""))).join(" "));
+  const gVis = filtra(grupos.filter(bateG), abG, tiG).sort(st.sit === "abertas"
     ? (a,b)=> String(a.prevista || "9").localeCompare(String(b.prevista || "9"))
     : (a,b)=> String(b.data_pedido || "").localeCompare(String(a.data_pedido || "")));
-  const lVis = filtra(locais, abL, tiL).sort((x,y)=> String(y.data_pedido || "").localeCompare(String(x.data_pedido || "")));
+  const lVis = filtra(locais.filter(bateL), abL, tiL).sort((x,y)=> String(y.data_pedido || "").localeCompare(String(x.data_pedido || "")));
 
   const cab =
     '<div class="pedcab">'+
@@ -3542,6 +3604,8 @@ function renderPedidos(){
     'Entre com a Microsoft e clique em <b>Atualizar</b> para ver e editar as ordens de compra.</span></div>';
 
   const chips =
+    '<div class="fbar"><input type="search" id="ped-busca" placeholder="Buscar por nº da OC/OP, fornecedor, produto ou SKU…" value="'+
+      esc(st.busca || "")+'"></div>'+
     '<div class="pedfil">'+
       [["abertas","Em aberto",nAb],["fechadas","Encerradas",nTot-nAb],["semtiny","Não lançadas no Tiny",nTiny],["todas","Todas",nTot]].map(([k,r,n])=>
         '<button class="chip'+(st.sit===k?" on":"")+(k==="semtiny"&&n?" alerta":"")+'" data-sit="'+k+'">'+esc(r)+' <span class="c num">'+n+'</span></button>').join("")+
@@ -3606,6 +3670,11 @@ function renderPedidos(){
 
   document.getElementById("ped-nova").onclick = ()=>{ abrirFormOC(); };
   document.getElementById("ped-novaop").onclick = ()=>{ abrirFormOP(); };
+  const pb = document.getElementById("ped-busca");
+  if (pb){
+    pb.oninput = ()=>{ st.busca = pb.value; st.buscaFoco = pb.selectionStart; renderPedidos(); };
+    if (st.buscaFoco != null){ pb.focus(); try { pb.setSelectionRange(st.buscaFoco, st.buscaFoco); } catch(e){} st.buscaFoco = null; }
+  }
   el.querySelectorAll("[data-sit]").forEach(b=>{
     b.onclick = ()=>{ st.sit = b.dataset.sit; renderPedidos(); };
   });
@@ -3658,6 +3727,8 @@ function mudancasOC(o, st){
       if (e.qtd != null && e.qtd > 0 && e.qtd !== l.qOC) campos.quantidade = e.qtd;
       if (e.prevista && e.prevista !== l.data_prevista) campos.data_prevista = e.prevista;
       if (e.status != null && e.status !== (l.status_planilha || "")) campos.status = e.status;
+      /* SKU escrito direto na coluna SKU desta linha (no lugar do PROCX que devolvia 0) */
+      if (e.sku && !l.sku) campos.sku = e.sku;
     }
     if (Object.keys(campos).length) mud.push({b:l.b, fp:l.fp, rot:"OC "+o.numero+" · "+nomeLinhaOC(l), campos, l});
   });
@@ -3691,6 +3762,10 @@ function telaOC(){
     if (e.cancelar) return '<div class="olin fech canc">'+nm+'<span class="stf">vai para <b>Cancelado</b> ao salvar · '+
       '<button class="link" data-eu="'+l.b+'">desfazer</button></span></div>';
     const q = e.qtd ?? l.qOC, d = e.prevista ?? l.data_prevista ?? "", s = e.status ?? (l.status_planilha || "");
+    const vinc = l.sku ? '' : '<div class="olin-vinc"><span>'+(e.sku
+        ? 'Vai ser vinculada a <b>'+esc(e.sku)+'</b> ao salvar · <button class="link" data-vx="'+l.b+'">desfazer</button>'
+        : '<b>Sem SKU:</b> a descrição não bate com a aba Produtos, então esta linha não entra na cobertura. Vincule o SKU:')+
+      '</span>'+(e.sku ? '' : '<div data-vinc="'+l.b+'"></div>')+'</div>';
     const opts = (ST_ABERTOS.includes(s) ? ST_ABERTOS : [s].concat(ST_ABERTOS)).map(x=>
       '<option value="'+esc(x)+'"'+(x===s?' selected':'')+'>'+esc(x || "(em branco)")+'</option>').join("");
     return '<div class="olin">'+nm+
@@ -3700,7 +3775,7 @@ function telaOC(){
         (d !== (l.data_prevista || "") ? ' class="mud"' : '')+'></label>'+
       '<label><span>Status</span><select data-es="'+l.b+'"'+(s !== (l.status_planilha || "") ? ' class="mud"' : '')+'>'+opts+'</select></label>'+
       '<button class="lixo" data-ec="'+l.b+'" aria-label="Cancelar este item" title="Cancelar este item">'+icon("lixo",15)+'</button>'+
-    '</div>';
+    '</div>'+vinc;
   }).join("");
   const novos = st.novos.map((n,i)=>{ const r = PORCOD[n.c];
     return '<div class="olin novo"><span class="nm"><b>'+esc(r ? titulo(r.nome) : n.c)+'</b>'+
@@ -3735,6 +3810,7 @@ function telaOC(){
       '</div>'+
       (st.erro ? '<div class="oerro"><b>'+esc(st.erroTit || "Não gravou.")+'</b> '+esc(st.erro)+'</div>' : '')+
       '<div class="ope">'+
+        '<button class="btn" id="x-sair">Sair sem salvar</button>'+
         (abertas.length
           ? '<button class="btn" id="x-cancelar">Cancelar a OC inteira</button>'+
             '<button class="btn" id="x-receber">'+icon("recebimento",14)+'Receber mercadoria</button>'
@@ -3754,6 +3830,7 @@ function telaOC(){
       const sv = box.querySelector("#x-salvar"); if (sv) sv.disabled = !n || st.gravando;
     };
     box.querySelector("#x-voltar").onclick = ()=>{ state.ped.oc = null; renderPedidos(); };
+    box.querySelector("#x-sair").onclick = ()=>{ state.ped.oc = null; renderPedidos(); };
     const ti = box.querySelector("#x-tiny");
     if (ti) ti.oninput = ()=>{ st.tiny = ti.value; ti.classList.toggle("mud", !!ti.value.trim()); rodape(); };
     box.querySelectorAll("[data-eq]").forEach(inp=>{
@@ -3774,6 +3851,13 @@ function telaOC(){
         sel.classList.toggle("mud", sel.value !== (l.status_planilha || "")); rodape(); };
     });
     box.querySelectorAll("[data-ec]").forEach(b=>{ b.onclick = ()=>{ ed(+b.dataset.ec).cancelar = true; renderPedidos(); }; });
+    box.querySelectorAll("[data-vinc]").forEach(h=>{
+      const b = +h.dataset.vinc;
+      montaBusca(h, { placeholder: "SKU ou nome do produto…",
+        itens: ()=> DATA.skus.filter(x => x.real).map(itemBusca),
+        aoEscolher: cod=>{ ed(b).sku = cod; renderPedidos(); } });
+    });
+    box.querySelectorAll("[data-vx]").forEach(x=>{ x.onclick = ()=>{ ed(+x.dataset.vx).sku = null; renderPedidos(); }; });
     box.querySelectorAll("[data-eu]").forEach(b=>{ b.onclick = ()=>{ ed(+b.dataset.eu).cancelar = false; renderPedidos(); }; });
     box.querySelectorAll("[data-nq]").forEach(inp=>{
       inp.oninput = ()=>{ const v = Math.floor(Number(inp.value)); if (v > 0) st.novos[+inp.dataset.nq].qtd = v; };
@@ -3854,6 +3938,7 @@ async function gravarOC(o, mud, novos, verbo){
     if (c.quantidade_nf != null) p.push("recebido <b>"+nf(c.quantidade_nf)+"</b> de "+nf(l.qOC));
     if (c.status) p.push("status → <b>"+esc(c.status)+"</b>");
     if (c.obs) p.push("nº do Tiny anotado");
+    if (c.sku) p.push("vinculada ao SKU <b>"+esc(c.sku)+"</b>");
     return "· "+esc(l.b !== undefined ? nomeLinhaOC(l) : m.rot)+": "+p.join(", ");
   });
   if (mud.length > 8) det.push("· e mais "+(mud.length-8));
@@ -4028,6 +4113,7 @@ function telaOrdem(){
         '<textarea id="o-obs" rows="2">'+esc(o.obs||"")+'</textarea></label>'+
       '<div class="oerro" id="o-erro" hidden></div>'+
       '<div class="ope">'+
+        '<button class="btn" id="o-sair">Sair sem salvar</button>'+
         (nova ? '' : '<button class="btn" id="o-cancelar">Cancelar esta ordem</button>'+
                      '<button class="btn" id="o-excluir">Excluir</button>')+
         '<span class="dir">'+(o.itens||[]).length+' item'+((o.itens||[]).length===1?'':'ns')+
@@ -4086,6 +4172,8 @@ function ligarFormOC(box){
   });
   const v = box.querySelector("#o-voltar");
   if (v) v.onclick = ()=>{ state.ped.form = null; renderPedidos(); };
+  const sair = box.querySelector("#o-sair");
+  if (sair) sair.onclick = ()=>{ state.ped.form = null; renderPedidos(); };
   ligarApagar(box, o, "o-cancelar", "o-excluir");
   const jaEra = !!ORDENS[o.id];
   box.querySelector("#o-salvar").onclick = async ()=>{
@@ -4221,6 +4309,7 @@ function telaOrdemOP(){
       '<label class="ocampo grande"><span>Observações</span>'+
         '<textarea id="p-obs" rows="2">'+esc(o.obs||"")+'</textarea></label>'))+
       '<div class="ope">'+
+        '<button class="btn" id="p-sair">Sair sem salvar</button>'+
         '<span class="dir">'+(P ? 'segura <b>'+nf((o.comp||[]).reduce((a,c)=>a+(o.qtd||0)*(c.q||1),0))+
           '</b> un. de componente' : '')+'</span>'+
         (jaExiste ? '<button class="btn" id="p-cancelar">Cancelar esta ordem</button>'+
@@ -4242,6 +4331,7 @@ function telaOrdemOP(){
     const q = box.querySelector("#p-qtd");
     if (q) q.oninput = ()=>{ o.qtd = Math.max(0, Math.floor(Number(q.value)||0)); renderPedidos(); };
     box.querySelector("#o-voltar").onclick = ()=>{ state.ped.form = null; renderPedidos(); };
+    box.querySelector("#p-sair").onclick = ()=>{ state.ped.form = null; renderPedidos(); };
     const fila = box.querySelector("#p-fila");
     if (fila) fila.onclick = ()=>{
       state.ped.form = null; state.homologando = true; state.fichasAberto = true;
@@ -4549,6 +4639,26 @@ function montaBusca(host, opts){
   };
 }
 /* a base que cada busca enxerga */
+/* produtos do cadastro do Tiny (Kondado) que ainda não estão no catálogo da torre */
+function extrasDoTiny(pai){
+  if (!ULTIMO_K || !Array.isArray(ULTIMO_K.produtos)) return [];
+  return ULTIMO_K.produtos.filter(p => p.codigo && !PORCOD[p.codigo] && p.codigo !== pai &&
+      !(FICHAS[pai] && (FICHAS[pai].itens||[]).some(i => i.c === p.codigo)))
+    .map(p => ({id:p.codigo, rot:titulo(p.nome || p.codigo), sub:p.codigo + " · do cadastro do Tiny, entra no catálogo da torre"}));
+}
+/* traz um produto do cadastro do Tiny para o catálogo da torre, como insumo */
+function garantirSku(cod){
+  if (PORCOD[cod] || !ULTIMO_K) return PORCOD[cod] || null;
+  const p = (ULTIMO_K.produtos || []).find(x => x.codigo === cod); if (!p) return null;
+  const e = (ULTIMO_K.estoque || []).find(x => x.codigo === cod) || {};
+  const s = ins(cod, p.nome || cod, p.categoria || "0. Insumos e Embalagens", "", p.marca || "", "M", "0", "Nacional",
+                _toNum(e.saldo), _toNum(e.saldoreservado));
+  s.saldo_vivo = !!e.codigo;
+  DATA.skus.push(s); PORCOD[cod] = s;
+  if (BASE) BASE[cod] = {vd:0, serie:{}, mes:0, acel:null, escopos:["insumo"], sem_hist:false, trocou:false,
+                         media:0, lead:s.leadtime, alvo:s.alvo};
+  return s;
+}
 const itemBusca = x => ({id:x.codigo, rot:titulo(x.nome),
   sub:x.codigo + " · " + x.origem_label + " · " + (x.disponivel>0 ? nf(x.disponivel)+" disp." : "sem saldo")});
 /* ficha é de produto acabado específico — kit classe K fica de fora, é agrupamento comercial */
@@ -4590,6 +4700,9 @@ function editorFicha(P){
       '<input type="number" min="1" step="1" value="1" data-qnovo="'+esc(cod)+'" aria-label="Quantidade por unidade">'+
     '</div>'+
     '<div class="ftrava" id="trava-'+esc(cod)+'" hidden></div>'+
+    '<label class="fmont">Dias de montagem <input type="number" min="0" step="1" value="'+
+      (f.montagem != null ? f.montagem : 2)+'" data-mont="'+esc(cod)+'"> '+
+      '<span>somados ao maior leadtime entre os componentes</span></label>'+
     (f.origem ? '<div class="forig"><span>◆</span><span><b>Veio de carga, não foi conferida.</b> '+
       esc(f.origem)+'</span></div>' : '')+
     (f.revisar ? '<div class="faviso"><span>▲</span><span><b>Ficha mexida depois de fechada.</b> '+
@@ -4612,4 +4725,1031 @@ function editorFicha(P){
 
 function renderFichas(){
   const el = document.getElementById("painel-fichas");
-  if (state.aba !== "mp
+  if (state.aba !== "mp"){ el.hidden = true; return; }
+  el.hidden = false;
+  el.open = !!state.fichasAberto;
+
+  const paisComFicha = Object.keys(FICHAS).filter(c=>PORCOD[c]).map(c=>PORCOD[c]);
+  const completas = paisComFicha.filter(P=>estadoFicha(P.codigo)==="completa").length;
+  const pendentes = paisComFicha.filter(P=>estadoFicha(P.codigo)!=="completa");
+  if (!pendentes.length) state.homologando = false;
+  /* na fila, quem vende mais vem primeiro: erro de quantidade custa na proporcao do giro */
+  const ordAZ = !state.homologando && state.fichaOrdem === "az";
+  const ord = (state.homologando ? pendentes : paisComFicha).slice()
+    .sort(ordAZ ? (a,b)=> titulo(a.nome).localeCompare(titulo(b.nome), "pt-BR")
+                : (a,b)=>(b.venda_diaria||0)-(a.venda_diaria||0));
+  if (state.homologando && !ord.some(P=>P.codigo===state.fichaAberta))
+    state.fichaAberta = ord.length ? ord[0].codigo : null;
+
+  const linhas = ord.map(P=>{
+    const est = estadoFicha(P.codigo);
+    const f = FICHAS[P.codigo];
+    const n = (f.itens||[]).length;
+    const on = state.fichaAberta === P.codigo;
+    return '<div class="fl'+(on?" on":"")+'" data-txt="'+esc((P.nome+" "+P.codigo).toLowerCase())+'">'+
+      '<button class="flh" data-abrir="'+esc(P.codigo)+'" aria-expanded="'+(on?"true":"false")+'">'+
+        '<span class="fln"><b>'+esc(titulo(P.nome))+'</b>'+
+          '<span><span class="mono">'+esc(P.codigo)+'</span> · classe '+esc(P.classe)+'</span></span>'+
+        '<span class="flv">'+(P.venda_diaria>0 ? P.venda_diaria.toFixed(1)+'/dia' : 'sem giro')+'</span>'+
+        '<span class="selos"><span class="selo '+SELO[est][0]+'">'+SELO[est][1]+'</span>'+
+          (f.revisar ? '<span class="selo s-rev">revisar</span>' : '')+'</span>'+
+        '<span class="flc">'+(n ? n+' comp.' : '–')+'</span>'+
+        icon("chevron",15).replace('class="ic"','class="ic ch"')+
+      '</button>'+
+      (on ? editorFicha(P) : '')+
+    '</div>';
+  }).join("") || '<p class="dim" style="padding:14px 0;font-size:12.4px">'+
+    'Nenhuma ficha cadastrada ainda. Comece escolhendo o produto acima.</p>';
+
+  el.innerHTML =
+    '<summary>'+icon("kit",15)+'Fichas técnicas'+
+      '<span class="fprog"><b>'+paisComFicha.length+'</b> cadastrada'+(paisComFicha.length===1?'':'s')+
+      (paisComFicha.length ? ' · '+completas+' completa'+(completas===1?'':'s') : '')+'</span>'+
+      icon("chevron",15).replace('class="ic"','class="ic ch"')+
+    '</summary>'+
+    '<div class="fichasbody">'+
+      '<p class="fichasnota">Ficha é de <b>produto acabado específico</b> — não é porque é acabado que tem ficha, '+
+      'e kit classe K fica de fora: kit é agrupamento comercial, sai em nota pelos componentes e a demanda deles já aparece sozinha na venda. '+
+      'A ficha é <b>decidida aqui</b> — é aqui que estão a venda, o leadtime e o cálculo. O Tiny também guarda a estrutura, na aba produção, '+
+      'mas quem manda é esta tela: o que sai daqui para o ERP é a <b>ordem de produção</b> e a <b>ordem de compra</b>. '+
+      '<b>Completa</b> é a que você conferiu inteira; <b>conferida</b> é selo que só uma OP dá.'+
+      '<span id="fonte-fichas"></span></p>'+
+      (paisComFicha.length ? '<div class="fhom">'+
+        '<span><span class="tit">Homologação</span><br>'+
+        '<span class="sub">'+completas+' de '+paisComFicha.length+' conferidas'+
+        (pendentes.length ? ' · '+pendentes.length+' na fila' : ' · fila zerada')+'</span></span>'+
+        '<span class="barra"><i style="width:'+
+          Math.round(100*completas/Math.max(1,paisComFicha.length))+'%"></i></span>'+
+        (pendentes.length ? '<button class="btn '+(state.homologando?'':'btn-primary')+'" data-fila="1">'+
+          (state.homologando ? 'Sair da fila' : 'Entrar na fila')+'</button>' : '')+
+      '</div>' : '')+
+      (state.homologando ? '' :
+        '<div class="fcriar"><div class="rot">Criar ficha para um produto</div><div id="busca-criar"></div></div>')+
+      (state.homologando ? '' : '<div class="fbar"><input type="search" id="ficha-busca" placeholder="Buscar ficha por nome ou SKU…" value="'+
+        esc(state.fichaBusca || "")+'">'+
+        '<button class="chip'+(ordAZ?'':' on')+'" data-ford="venda">Mais vendidos primeiro</button>'+
+        '<button class="chip'+(ordAZ?' on':'')+'" data-ford="az">A → Z</button></div>')+
+      '<div class="fllista">'+linhas+'</div>'+
+    '</div>';
+
+  el.ontoggle = ()=>{ state.fichasAberto = el.open; };
+  ligarFichas(el);
+  /* a busca só esconde linhas: redesenhar tiraria o foco do campo a cada letra */
+  const fb = el.querySelector("#ficha-busca");
+  const filtraFichas = ()=>{
+    const t = String(state.fichaBusca || "").trim().toLowerCase();
+    el.querySelectorAll(".fllista .fl").forEach(d=>{ d.hidden = !!t && !d.dataset.txt.includes(t); });
+  };
+  if (fb) fb.oninput = ()=>{ state.fichaBusca = fb.value; filtraFichas(); };
+  filtraFichas();
+  el.querySelectorAll("[data-ford]").forEach(b=>{ b.onclick = ()=>{ state.fichaOrdem = b.dataset.ford; renderFichas(); }; });
+}
+
+function ligarFichas(raiz){
+  const criar = raiz.querySelector("#busca-criar");
+  if (criar) montaBusca(criar, {
+    placeholder: "Digite o nome ou o SKU do produto montado…",
+    itens: ()=> baseProdutos().filter(x=>!FICHAS[x.codigo]).map(itemBusca),
+    aoEscolher: cod=>{
+      FICHAS[cod] = {itens:[], estado:"rascunho", por:USUARIO, em:HOJE_ISO, revisar:false};
+      state.fichaAberta = cod; state.fichasAberto = true;
+      gravarFicha(cod); explodir(); render();
+    }
+  });
+  raiz.querySelectorAll("[data-busca]").forEach(host=>{
+    const pai = host.dataset.busca;
+    montaBusca(host, {
+      placeholder: "Digite o nome ou o SKU do componente…",
+      itens: ()=> DATA.skus.filter(x => !podeEntrar(pai, x.codigo)).map(itemBusca).concat(extrasDoTiny(pai)),
+      aoEscolher: comp=>{
+        const qi = raiz.querySelector('[data-qnovo="'+CSS.escape(pai)+'"]');
+        const q = Math.floor(Number(qi ? qi.value : 1));
+        const tr = document.getElementById("trava-"+pai);
+        const erro = podeEntrar(pai, comp) || (q > 0 ? null :
+          "A quantidade tem que ser um número inteiro maior que zero.");
+        if (erro){ if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>"+esc(erro)+"</span>"; } return; }
+        if (!PORCOD[comp]) garantirSku(comp);
+        if (!FICHAS[pai]) FICHAS[pai] = {itens:[], estado:"rascunho", por:USUARIO, em:HOJE_ISO, revisar:false};
+        FICHAS[pai].itens.push({c:comp, q:q});
+        mexeu(pai, true);
+      }
+    });
+  });
+  raiz.querySelectorAll("[data-fila]").forEach(b=>{
+    b.onclick = ()=>{ state.homologando = !state.homologando;
+      state.fichasAberto = true; if (state.homologando) state.fichaAberta = null; renderFichas(); };
+  });
+  raiz.querySelectorAll("[data-homologa]").forEach(b=>{
+    b.onclick = ()=>{
+      const cod = b.dataset.homologa;
+      const f = FICHAS[cod]; if (!f) return;
+      /* conferida de verdade: sai o selo de rascunho e some a ressalva da carga */
+      f.estado = "completa"; f.revisar = false; delete f.origem;
+      /* proxima da fila antes de redesenhar, para nao cair na ficha que acabou de sair */
+      const fila = Object.keys(FICHAS).filter(c=>PORCOD[c] && c!==cod && estadoFicha(c)!=="completa")
+        .map(c=>PORCOD[c]).sort((a,b)=>(b.venda_diaria||0)-(a.venda_diaria||0));
+      state.fichaAberta = fila.length ? fila[0].codigo : null;
+      mexeu(cod, false);
+    };
+  });
+  raiz.querySelectorAll("[data-abrir]").forEach(b=>{
+    b.onclick = ()=>{ const c = b.dataset.abrir;
+      state.fichaAberta = (state.fichaAberta === c) ? null : c; state.fichasAberto = true; renderFichas(); };
+  });
+  raiz.querySelectorAll("[data-del]").forEach(b=>{
+    b.onclick = ()=>{ const a = b.dataset.del.split("|");
+      FICHAS[a[0]].itens.splice(+a[1],1); mexeu(a[0], false); };
+  });
+  raiz.querySelectorAll("[data-q]").forEach(inp=>{
+    inp.onchange = ()=>{
+      const a = inp.dataset.q.split("|"), pai = a[0], i = +a[1];
+      const v = Math.floor(Number(inp.value));
+      const tr = document.getElementById("trava-"+pai);
+      if (!(v > 0)){
+        if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>A quantidade tem que ser um número inteiro maior que zero. Em branco não vale — ficha sem quantidade erra o montável em silêncio.</span>"; }
+        inp.value = FICHAS[pai].itens[i].q; return;
+      }
+      FICHAS[pai].itens[i].q = v; mexeu(pai, true);
+    };
+  });
+  raiz.querySelectorAll("[data-mont]").forEach(inp=>{
+    inp.onchange = ()=>{
+      const pai = inp.dataset.mont, v = Math.floor(Number(inp.value));
+      if (!(v >= 0)){ inp.value = (FICHAS[pai] && FICHAS[pai].montagem != null) ? FICHAS[pai].montagem : 2; return; }
+      if (!FICHAS[pai]) return;
+      FICHAS[pai].montagem = v; mexeu(pai, false);
+    };
+  });
+  raiz.querySelectorAll("[data-estado]").forEach(b=>{
+    b.onclick = ()=>{ const a = b.dataset.estado.split("|");
+      FICHAS[a[0]].estado = a[1]; if (a[1] === "completa") FICHAS[a[0]].revisar = false; mexeu(a[0], false); };
+  });
+  raiz.querySelectorAll("[data-apaga]").forEach(b=>{
+    b.onclick = ()=>{
+      const cod = b.dataset.apaga;
+      if (b.dataset.certo !== "1"){ b.dataset.certo = "1"; b.textContent = "Apagar mesmo?"; return; }
+      delete FICHAS[cod]; state.fichaAberta = null;
+      apagarFicha(cod); salvarFichas(); explodir(); render();
+    };
+  });
+  const fonte = raiz.querySelector("#fonte-fichas");
+  if (fonte) fonte.innerHTML = DB
+    ? (DB.planilha ? ' <b>Guardando na aba Cão da planilha de BI</b> — todo mundo que abre esta página vê as mesmas fichas.'
+                   : ' <b>Guardando no banco do artefato</b> — todo mundo que abre esta página vê as mesmas fichas.')
+    : ' <b>Guardando só neste navegador</b> — as fichas ainda não estão sendo compartilhadas.';
+}
+
+function render(){
+  renderAbas();
+  if (state.aba === "pedidos"){ renderPedidos(); renderBarra(); return; }
+  renderFichas(); renderFiltros(); renderKpis(); renderAcc(); renderRecado(); renderTabela();
+  renderBarra();
+}
+
+/* ============================================================
+   BARRA DE SELECAO
+   A selecao e explicita e atravessa filtro: quem marcou cinco importados e depois
+   foi ver as rupturas continua com os cinco. A barra avisa quantos sairam da tela.
+   Ela e tambem onde o conjunto se resume — os KPIs la em cima sao do recorte,
+   estes numeros aqui embaixo sao do que voce marcou.
+   ============================================================ */
+function abrirPopMarc(pop, sel){
+  const codigos = sel.map(x=>x.codigo);
+  const lista = Object.values(MARCS).sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));
+  pop.hidden = false;
+  pop.innerHTML =
+    '<h4>'+icon("nota",14)+'Marcar '+sel.length+' selecionado'+(sel.length===1?'':'s')+'</h4>'+
+    (lista.length
+      ? '<div class="mlista">'+lista.map(m=>{
+          const dentro = codigos.filter(c=>m.skus.includes(c)).length;
+          const todos = dentro === codigos.length;
+          return '<div class="mlinha">'+
+            '<span class="nm"><i style="background:'+m.cor+'"></i><span>'+esc(m.nome)+'</span></span>'+
+            '<span class="qt">'+m.skus.length+' SKUs'+
+              (dentro && !todos ? ' · '+dentro+' já dentro' : '')+'</span>'+
+            '<button class="btn" data-marc="'+esc(m.id)+'" data-tirar="'+(todos?"1":"0")+'">'+
+              (todos ? "Tirar" : "Marcar")+'</button></div>';
+        }).join("")+'</div>'
+      : '<p class="hoje">Nenhum marcador ainda. Crie o primeiro aqui embaixo.</p>')+
+    '<div class="mnovo"><div class="rot">Novo marcador</div>'+
+      '<div class="lin"><input type="text" id="m-nome" maxlength="34" placeholder="Curva A, Comprar em outubro…">'+
+        '<button class="btn btn-primary" id="m-criar">Criar e marcar</button></div>'+
+      '<div class="mcores" id="m-cores">'+CORES_MARC.map((c,i)=>
+        '<button data-cor="'+c+'" style="background:'+c+'" aria-pressed="'+(i===0?"true":"false")+
+        '" aria-label="cor '+(i+1)+'"></button>').join("")+'</div>'+
+    '</div>'+
+    '<div class="sbpe"><button class="btn" id="m-fechar">Fechar</button></div>';
+
+  pop.querySelectorAll("[data-marc]").forEach(b=>{
+    b.onclick = ()=>{
+      const m = MARCS[b.dataset.marc]; if (!m) return;
+      if (b.dataset.tirar === "1") m.skus = m.skus.filter(c=>!codigos.includes(c));
+      else codigos.forEach(c=>{ if (!m.skus.includes(c)) m.skus.push(c); });
+      m.por = USUARIO; m.em = HOJE_ISO;
+      gravarMarc(m.id);
+      const guarda = new Set(state.sel); render(); state.sel = guarda;
+      renderBarra(); abrirPopMarc(document.getElementById("sb-pop"), selecionados());
+    };
+  });
+  let cor = CORES_MARC[0];
+  pop.querySelectorAll("#m-cores button").forEach(b=>{
+    b.onclick = ()=>{ cor = b.dataset.cor;
+      pop.querySelectorAll("#m-cores button").forEach(o=>o.setAttribute("aria-pressed", o===b?"true":"false")); };
+  });
+  const criar = ()=>{
+    const nome = document.getElementById("m-nome").value.trim();
+    if (!nome) return;
+    let id = idMarc(nome), n = 2;
+    while (MARCS[id]) id = idMarc(nome) + "-" + (n++);
+    MARCS[id] = {id:id, nome:nome, cor:cor, skus:codigos.slice(), por:USUARIO, em:HOJE_ISO};
+    gravarMarc(id);
+    const guarda = new Set(state.sel); render(); state.sel = guarda;
+    renderBarra(); abrirPopMarc(document.getElementById("sb-pop"), selecionados());
+  };
+  document.getElementById("m-criar").onclick = criar;
+  document.getElementById("m-nome").onkeydown = e=>{ if (e.key === "Enter") criar(); };
+  document.getElementById("m-fechar").onclick = ()=>{ pop.hidden = true; };
+}
+
+let PISCAR = null;        /* codigos que acabaram de mudar, para o pisca-pisca */
+let DESFAZER = null;      /* {antes:{cod:valorAnterior}, n, dias} */
+let TIMER_DESFAZER = null;
+
+function selecionados(){
+  return DATA.skus.filter(x => state.sel.has(x.codigo));
+}
+/* leadtime de produto com ficha e derivado (componente mais lento + montagem):
+   ele nao pode receber valor digitado, nem individual nem em massa. */
+function aceitaLead(s){ return !s.lead_derivado; }
+
+/* como a linha ficaria se o leadtime fosse n — mesma escada do ef(), so que
+   com o numero da simulacao no lugar do que esta gravado */
+function comoFicaria(s0, n){
+  const b = (s0.alt3m && rupturasDe(s0).length) ? Object.assign({}, s0, s0.alt3m) : s0;
+  return Object.assign({}, b, comLead(b, n));
+}
+
+function renderBarra(){
+  const bar = document.getElementById("selbar");
+  if (!bar) return;
+  if (DESFAZER){ pintaDesfazer(bar); return; }
+  const sel = selecionados();
+  bar.hidden = sel.length === 0;
+  document.body.classList.toggle("combarra", sel.length > 0);
+  if (!sel.length){ bar.innerHTML = ""; document.body.style.removeProperty("--folga-barra"); return; }
+
+  const naTela = {}; visiveis(false).forEach(x=>naTela[x.codigo] = 1);
+  const fora = sel.filter(x=>!naTela[x.codigo]).length;
+  const comprar = sel.reduce((a,x)=>a + (ef(x).sugestao || 0), 0);
+  const rupturas = sel.filter(x=>x.em_ruptura).length;
+
+  bar.innerHTML =
+    '<div class="sbin">'+
+      '<div class="sbn"><b>'+sel.length+'</b><span>selecionado'+(sel.length===1?'':'s')+'</span></div>'+
+      '<button class="btn btn-primary" id="sb-lead">'+icon("ajustes",14)+'Ajustar leadtime</button>'+
+      '<button class="btn" id="sb-marc">'+icon("nota",14)+'Marcar como…</button>'+
+      '<button class="btn" id="sb-oc">'+icon("pedido",14)+'Lançar ordem de compra</button>'+
+      '<div class="sbdev"><span class="rot">para desenvolver</span>'+
+        '<button class="btn dev" disabled title="Vai nascer junto com a aba de Pedidos">Lançar ordem de produção</button>'+
+        '<button class="btn dev" disabled title="Exportação do recorte, ainda por construir">Exportar</button>'+
+      '</div>'+
+      '<button class="sblimpar" id="sb-limpar">Limpar seleção</button>'+
+      '<div class="sbtot">'+
+        '<div><b>'+sel.length+'</b><span>SKUs</span></div>'+
+        '<div><b>'+nf(comprar)+'</b><span>un. a comprar</span></div>'+
+        '<div'+(rupturas?' class="aten"':'')+'><b>'+rupturas+'</b><span>em ruptura</span></div>'+
+      '</div>'+
+      (fora ? '<div class="sbfora"><b>'+fora+'</b> fora do filtro atual — continuam marcados.</div>' : '')+
+    '</div>'+
+    '<div class="sbpop" id="sb-pop" hidden></div>';
+
+  document.getElementById("sb-limpar").onclick = ()=>{
+    state.sel.clear(); state.ultimoChk = null; render();
+  };
+  document.getElementById("sb-lead").onclick = ()=>{
+    const pop = document.getElementById("sb-pop");
+    if (!pop.hidden && pop.dataset.qual === "lead"){ pop.hidden = true; return; }
+    pop.dataset.qual = "lead"; abrirPopLead(pop, sel);
+  };
+  document.getElementById("sb-oc").onclick = ()=>{ abrirFormOC(); };
+  document.getElementById("sb-marc").onclick = ()=>{
+    const pop = document.getElementById("sb-pop");
+    if (!pop.hidden && pop.dataset.qual === "marc"){ pop.hidden = true; return; }
+    pop.dataset.qual = "marc"; abrirPopMarc(pop, sel);
+  };
+  folgaDaBarra(bar);
+}
+
+function folgaDaBarra(bar){
+  requestAnimationFrame(()=>{
+    document.body.style.setProperty("--folga-barra", (bar.offsetHeight + 18) + "px");
+  });
+}
+
+function abrirPopLead(pop, sel){
+  const podem = sel.filter(aceitaLead);
+  const derivados = sel.length - podem.length;
+  const proprios = podem.filter(x=>leadEditado(x.codigo));
+  const padrao = podem.length - proprios.length;
+  const valores = [...new Set(proprios.map(x=>leadDe(x.codigo)))].sort((a,b)=>a-b);
+
+  pop.hidden = false;
+  pop.innerHTML =
+    '<h4>'+icon("ajustes",14)+'Ajustar leadtime · '+sel.length+' selecionado'+(sel.length===1?'':'s')+'</h4>'+
+    '<p class="hoje">Hoje: <b>'+padrao+'</b> no padrão de '+DATA.leadtime+' d'+
+      (proprios.length ? ' · <b>'+proprios.length+'</b> com leadtime próprio ('+valores.join(' e ')+' d)' : '')+'</p>'+
+    '<div class="campo"><input type="number" id="sb-lead-in" min="1" max="365" step="1" value="'+
+      DATA.leadtime+'" aria-label="novo leadtime em dias"><span class="dim">dias corridos</span></div>'+
+    '<div class="sbprev" id="sb-prev"></div>'+
+    '<div class="sbpe"><button class="btn" id="sb-cancel">Cancelar</button>'+
+      '<button class="btn btn-primary" id="sb-ok">Confirmar</button></div>';
+
+  const inp = document.getElementById("sb-lead-in");
+  const desenha = ()=>{
+    const n = parseInt(inp.value, 10);
+    const prev = document.getElementById("sb-prev");
+    const ok = document.getElementById("sb-ok");
+    if (isNaN(n) || n < 1 || n > 365){
+      prev.innerHTML = '<div class="li fora"><span>Digite um número de 1 a 365.</span></div>';
+      ok.disabled = true; ok.textContent = "Confirmar"; return;
+    }
+    /* a previa recalcula a cada tecla: e ver a cor mudar antes que torna isto seguro */
+    const mudam = podem.filter(x=>leadDe(x.codigo) !== n);
+    let trocaCor = 0; const novasRupturas = [];
+    mudam.forEach(x=>{
+      const antes = estado(ef(x));
+      const dep = comoFicaria(x, n);
+      if (estado(dep) !== antes) trocaCor++;
+      const rupAntes = ef(x).pedir_ate ? diasAte(ef(x).pedir_ate) < 0 : false;
+      const rupDep = dep.pedir_ate ? diasAte(dep.pedir_ate) < 0 : false;
+      if (rupDep && !rupAntes) novasRupturas.push(x);
+    });
+    prev.innerHTML =
+      '<div class="li"><b>'+mudam.length+'</b><span>alteram</span></div>'+
+      (podem.length - mudam.length ? '<div class="li fora"><b>'+(podem.length-mudam.length)+
+        '</b><span>já estão em '+n+' d</span></div>' : '')+
+      (derivados ? '<div class="li fora"><b>'+derivados+'</b><span>têm ficha técnica — leadtime derivado, ficam de fora</span></div>' : '')+
+      (trocaCor ? '<div class="li cor"><b>'+trocaCor+'</b><span>mudam de cor</span></div>' : '')+
+      (novasRupturas.length ? '<div class="li rup"><b>'+novasRupturas.length+
+        '</b><span>passam a estar com o pedido vencido</span></div>'+
+        '<div class="quais">'+novasRupturas.slice(0,6).map(x=>
+          '<span class="mono">'+esc(x.codigo)+'</span> '+esc(titulo(x.nome))).join('<br>')+
+          (novasRupturas.length>6 ? '<br>e mais '+(novasRupturas.length-6)+'…' : '')+'</div>' : '');
+    ok.disabled = mudam.length === 0;
+    ok.textContent = mudam.length ? "Confirmar "+(mudam.length===1?"1":"as "+mudam.length) : "Nada a mudar";
+  };
+  inp.oninput = desenha; desenha(); inp.focus(); inp.select();
+
+  document.getElementById("sb-cancel").onclick = ()=>{ pop.hidden = true; };
+  document.getElementById("sb-ok").onclick = ()=>{
+    const n = parseInt(inp.value, 10);
+    if (isNaN(n) || n < 1 || n > 365) return;
+    const mudam = podem.filter(x=>leadDe(x.codigo) !== n);
+    if (!mudam.length) return;
+    const antes = {};
+    mudam.forEach(x=>{
+      const r = reg(x.codigo);
+      antes[x.codigo] = r.leadtime || null;      /* null = estava no padrão */
+      r.leadtime = n; r.quemLead = USUARIO; r.quandoLead = HOJE_ISO;
+    });
+    salvarReg();
+    PISCAR = mudam.map(x=>x.codigo);
+    state.sel.clear(); state.ultimoChk = null;
+    DESFAZER = {antes: antes, n: mudam.length, dias: n};
+    clearTimeout(TIMER_DESFAZER);
+    TIMER_DESFAZER = setTimeout(()=>{ DESFAZER = null; renderBarra(); }, 20000);
+    render();
+  };
+}
+
+function pintaDesfazer(bar){
+  bar.hidden = false;
+  document.body.classList.add("combarra");
+  bar.innerHTML =
+    '<div class="sbfeito"><span class="ok">✓</span>'+
+      '<span class="tx"><b>'+DESFAZER.n+'</b> leadtime'+(DESFAZER.n===1?'':'s')+
+      ' alterado'+(DESFAZER.n===1?'':'s')+' para <b>'+DESFAZER.dias+' dias</b>.</span>'+
+      '<button class="btn" id="sb-undo">Desfazer</button></div>';
+  folgaDaBarra(bar);
+  document.getElementById("sb-undo").onclick = ()=>{
+    Object.keys(DESFAZER.antes).forEach(cod=>{
+      const r = reg(cod);
+      r.leadtime = DESFAZER.antes[cod];
+      if (!r.leadtime){ r.quemLead = null; r.quandoLead = null; }
+    });
+    salvarReg();
+    clearTimeout(TIMER_DESFAZER); DESFAZER = null;
+    render();
+  };
+}
+
+/* ---------- tela de entrada ----------
+   A capa agora e a ilustracao, que traz o letreiro e as cores dentro dela: nao ha
+   mais o que repintar por tema. A unica coisa viva ali e a linha de texto, que le
+   o conteudo real da torre — quantas decisoes de compra esperam hoje. */
+function pintaCapa(){}
+function abrirCapa(){
+  const reais = DATA.skus.filter(s => s.real && (s.escopos||["acabado"]).includes("acabado"));
+  const acao = reais.filter(FILTROS_ST.acao).length;
+  document.getElementById("ent-ln").innerHTML =
+    "<b>" + acao + " decisões de compra</b> esperam por você na leitura de " + dbr(DATA.gerado_em) + ".";
+  pintaCapa();
+  document.getElementById("entrada").hidden = false;
+}
+document.getElementById("ent-btn").onclick = ()=>{ document.getElementById("entrada").hidden = true; };
+
+/* =========================================================================
+   DADO AO VIVO — login Microsoft (MSAL) + Kondado (via Worker) + OC do SharePoint
+   Mesma ligação da versão com login: o Worker devolve cadastro, saldo e venda
+   (NF emitida) do Tiny; a aba "OC's" da planilha de BI no SharePoint traz os
+   pedidos de compra. O resto da torre (fichas, ordens, marcadores) segue igual.
+   ========================================================================= */
+const MSAL_CONFIG = {
+  auth: {
+    clientId: "faac45db-51bb-412d-af51-b706e2127b91",
+    authority: "https://login.microsoftonline.com/3075413c-ecbd-4162-955b-660d6163d85b",
+    redirectUri: window.location.origin + window.location.pathname,
+  },
+  cache: { cacheLocation: "sessionStorage", storeAuthStateInCookie: false },
+};
+const GRAPH_SCOPES = ["Sites.ReadWrite.All"];
+const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+const SITE_HOSTNAME = "holdbeautyimportacao.sharepoint.com";
+const SITE_PATH = "AREA_BI";
+/* planilha de BI (conteúdo do Portal - Compras): aba OC's, tabela Tabela1 */
+const DRIVE_ITEM_PATH = "BI_Dados/Base_de_Dados_-_Power_BI .xlsx";
+const SHEET_NAME = "OC's";
+const WORKER_URL = "https://torre-estoque-proxy.titecnologiadainformacaohold.workers.dev";
+let AO_VIVO = false;
+
+function _toNum(v, def=0){ if (v===null||v===undefined||v==="") return def; const n=parseFloat(v); return isNaN(n)?def:n; }
+function _toDate(v){
+  if (v===null||v===undefined||v==="") return null;
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const s = String(v).trim(); let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return new Date(+m[3], +m[2]-1, +m[1]);
+  return null;
+}
+function _isoDate(d){ if (!d) return null;
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+
+/* ---------- SharePoint (Microsoft Graph) ---------- */
+async function graphFetch(url, token){
+  const resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (!resp.ok){ const t = await resp.text().catch(()=> "");
+    throw new Error("SharePoint HTTP " + resp.status + ": " + t.slice(0,300)); }
+  return resp;
+}
+async function resolveSiteId(token){
+  const r = await graphFetch(GRAPH_BASE + "/sites/" + SITE_HOSTNAME + ":/sites/" + SITE_PATH, token);
+  return (await r.json()).id;
+}
+/* ---------- aba OC's: colunas, célula e impressão digital da linha ---------- */
+/* nomes reais da aba OC's primeiro; os antigos ficam como reserva */
+const OC_ALIAS = {
+  sku:          ["sku","codigo","codigo (sku)"],
+  numero:       ["oc / invoice","oc/invoice","oc","numero"],
+  fornecedor:   ["fornecedor"],
+  descricao:    ["descricao","produto_nome","produto"],
+  origem:       ["origem"],
+  leadtime:     ["leadtime"],
+  quantidade:   ["quantidade oc","quantidade"],
+  nf:           ["nf"],
+  quantidade_nf:["quantidade nf"],
+  data_prevista:["previsao/eta","previsao / eta","eta","data_prevista"],
+  data_coleta:  ["coleta/etd","coleta / etd","etd"],
+  data_pedido:  ["data","data_pedido"],
+  data_entrega: ["entrega","data_entrega"],
+  status:       ["status"],
+  obs:          ["observacoes","observacao","obs"],
+};
+/* cabeçalho normalizado: minúsculo, sem acento, espaços simples, sem os dois-pontos do fim */
+const _normCab = h => String(h||"").normalize("NFD").replace(/[̀-ͯ]/g,"")
+                   .toLowerCase().replace(/\s+/g," ").trim().replace(/\s*:+$/,"").trim();
+function _idxOC(cab){
+  const H = {}; (cab||[]).forEach((h,i)=>{ h = _normCab(h); if (h && H[h] === undefined) H[h] = i; });
+  const idx = {};
+  Object.entries(OC_ALIAS).forEach(([k, alts])=>{
+    const a = alts.find(x => H[_normCab(x)] !== undefined); idx[k] = a === undefined ? undefined : H[_normCab(a)]; });
+  return idx;
+}
+/* data da célula: serial do Excel (API do workbook) ou Date/texto (arquivo baixado) */
+function _isoCel(v){
+  if (typeof v === "number" && v > 20000 && v < 80000)
+    return _isoDate(new Date(Math.round((v - 25569) * 86400000) + 12*3600000));
+  const d = _toDate(v); return d ? _isoDate(d) : null;
+}
+/* impressão digital da linha: antes de gravar, a torre relê a tabela e confere se a
+   linha ainda é a mesma que estava na tela. Se alguém mexeu nela, não grava. */
+function _fpOC(r, idx){
+  const c = k => (!r || idx[k] === undefined) ? "" : r[idx[k]];
+  const t = v => String(v ?? "").trim().toUpperCase();
+  return [t(c("numero")), t(c("fornecedor")), t(c("descricao")), _toNum(c("quantidade")),
+          _toNum(c("quantidade_nf")), _isoCel(c("data_prevista")) || "", t(c("status"))].join("|");
+}
+const chaveOC = (numero, fornecedor) => String(numero ?? "").trim() + "|" + String(fornecedor ?? "").trim();
+function _colNum(letras){ let n = 0; for (const ch of letras) n = n*26 + (ch.charCodeAt(0) - 64); return n - 1; }
+function _colLetra(n){ let s = ""; n++; while (n > 0){ const m = (n-1) % 26; s = String.fromCharCode(65+m) + s; n = Math.floor((n-1)/26); } return s; }
+function _wbUrl(){
+  return GRAPH_BASE + "/sites/" + siteIdCache + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/workbook";
+}
+/* a Tabela1 inteira pela API do workbook — enxerga na hora o que acabou de ser gravado.
+   lin0/col0: onde a tabela começa na aba (linha do cabeçalho e primeira coluna). */
+async function lerTabelaOC(token){
+  const r = await graphJson(_wbUrl() + "/tables/" + TABELA_OC + "/range?$select=address,values", token);
+  const fim = String(r.address || "").split("!").pop();
+  const m = /^\$?([A-Z]+)\$?(\d+)/.exec(fim);
+  return { valores: r.values || [], col0: m ? _colNum(m[1]) : 0, lin0: m ? +m[2] : 1 };
+}
+async function ocListOpen(token, siteId){
+  if (!siteIdCache) siteIdCache = siteId;
+  let rows;
+  try { rows = (await lerTabelaOC(token)).valores; }
+  catch(e){
+    /* reserva: baixa o arquivo inteiro e lê a aba com o SheetJS */
+    const url = GRAPH_BASE + "/sites/" + siteId + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/content";
+    const buf = await (await graphFetch(url, token)).arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    if (!wb.SheetNames.includes(SHEET_NAME))
+      throw new Error("Aba '" + SHEET_NAME + "' não encontrada. Abas: " + wb.SheetNames.join(", "));
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[SHEET_NAME], { header: 1, defval: null, blankrows: true });
+  }
+  const idx = _idxOC(rows[0]);
+  if (idx.sku === undefined || idx.quantidade === undefined || idx.data_prevista === undefined)
+    throw new Error("Aba '" + SHEET_NAME + "': não achei as colunas SKU, Quantidade OC e Previsão/ETA. Cabeçalho lido: " +
+                    (rows[0]||[]).filter(Boolean).join(" · "));
+  const col = (r, k) => idx[k] === undefined ? null : (r[idx[k]] ?? null);
+  const iso = _isoCel;
+  const FECHADA = /entreg|receb|finaliz|conclu|cancel/i;
+  const out = [], semSku = [], todas = [];
+  for (let i = 1; i < rows.length; i++){
+    const r = rows[i];
+    if (!r || r.every(v => v === null || v === "")) continue;
+    const sku = col(r,"sku");
+    const skuTxt = sku === null ? "" : String(sku).trim();
+    /* SKU vem de um PROCX na planilha: 0 ou #N/D = descrição que não achou na aba Produtos */
+    const temSku = !(!skuTxt || skuTxt === "0" || /^#/.test(skuTxt));
+    const qOC = _toNum(col(r,"quantidade")), qNF = _toNum(col(r,"quantidade_nf"));
+    const entrega = iso(col(r,"data_entrega"));
+    const stTxt = String(col(r,"status") || "").trim();
+    const fechada = FECHADA.test(stTxt) || (!!entrega && !(qNF > 0 && qNF < qOC));
+    const numero = col(r,"numero") !== null ? String(col(r,"numero")).trim() : null;
+    const fornecedor = col(r,"fornecedor");
+    const key = chaveOC(numero, fornecedor);
+    /* toda linha da aba, com ou sem SKU: é a lista que a aba Pedidos mostra e edita.
+       b = posição da linha no corpo da Tabela1 (0 = logo abaixo do cabeçalho) */
+    todas.push({ b: i - 1, fp: _fpOC(r, idx), key, numero,
+      fornecedor: fornecedor === null ? "" : String(fornecedor).trim(),
+      descricao: String(col(r,"descricao") || "").trim(), sku: temSku ? skuTxt : null,
+      qOC, qNF, nf: col(r,"nf"), obs: col(r,"obs"),
+      data_pedido: iso(col(r,"data_pedido")), data_prevista: iso(col(r,"data_prevista")), data_entrega: entrega,
+      status_planilha: stTxt, fechada, cancelada: /cancel/i.test(stTxt),
+      falta: fechada ? 0 : Math.max(0, qOC - (qNF > 0 ? qNF : 0)) });
+    if (!temSku){
+      if (col(r,"descricao") || col(r,"quantidade")) semSku.push({
+        oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: stTxt});
+      continue;
+    }
+    out.push({
+      sku: skuTxt,
+      numero,
+      key,
+      linha: i - 1,
+      produto_nome: col(r,"descricao"),
+      fornecedor: fornecedor,
+      /* entrega parcial: o que falta chegar é a OC menos o que já veio na NF */
+      quantidade: fechada ? qOC : Math.max(0, qOC - (qNF > 0 ? qNF : 0)),
+      quantidade_oc: qOC, quantidade_nf: qNF || null, nf: col(r,"nf"),
+      data_prevista: iso(col(r,"data_prevista")),
+      data_coleta: iso(col(r,"data_coleta")),
+      data_pedido: iso(col(r,"data_pedido")),
+      data_entrega: entrega,
+      origem: col(r,"origem"),
+      leadtime: col(r,"leadtime"),
+      status: fechada ? (/cancel/i.test(stTxt) ? "Cancelado" : "Entregue") : "Pendente",
+      status_planilha: stTxt || null,
+    });
+  }
+  out.semSku = semSku; out.todas = todas;
+  return out;
+}
+/* ---------- escreve a OC na planilha de BI (aba OC's, tabela Tabela1) ----------
+   Uma linha por item. Origem, SKU, Leadtime, atraso e Leadtime real ficam com as
+   formulas da propria tabela; a Previsao/ETA vai com a data digitada na torre.
+   A Descricao precisa ser a da aba Produtos, senao o PROCX do SKU devolve 0. */
+const TABELA_OC = "Tabela1";
+function _serialExcel(iso){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ""); if (!m) return "";
+  return (Date.UTC(+m[1], +m[2]-1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000;
+}
+async function graphJson(url, token, method, body){
+  const resp = await fetch(url, { method: method || "GET",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined });
+  if (!resp.ok){ const t = await resp.text().catch(()=> "");
+    throw new Error("SharePoint HTTP " + resp.status + ": " + t.slice(0,300)); }
+  return resp.status === 204 ? null : resp.json();
+}
+async function escreverOCPlanilha(o){
+  if (!account || !msalInstance) throw new Error("sem login da Microsoft");
+  const token = await getGraphToken();
+  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+  const wb = GRAPH_BASE + "/sites/" + siteIdCache + "/drive/root:/" + encodeURIComponent(DRIVE_ITEM_PATH) + ":/workbook";
+  /* SKU -> descricao exata da aba Produtos */
+  const prod = await graphJson(wb + "/worksheets('Produtos')/usedRange(valuesOnly=true)?$select=values", token);
+  const desc = {};
+  (prod.values || []).slice(1).forEach(r=>{ const k = String(r[2]||"").trim().toUpperCase(); if (k && !desc[k]) desc[k] = String(r[1]||"").trim(); });
+  const semCadastro = [];
+  const obs = [o.obs, "Lançada pela Torre" + (USUARIO ? " por " + USUARIO : "") + (o.numero_tiny ? " · Tiny " + o.numero_tiny : "")]
+                .filter(Boolean).join(" · ");
+  const linhas = (o.itens||[]).map(it=>{
+    const d = desc[String(it.c).trim().toUpperCase()];
+    const P = PORCOD[it.c];
+    if (!d) semCadastro.push(it.c);
+    const L = new Array(30).fill("");
+    L[0]  = _serialExcel(o.data_pedido || HOJE_ISO);                 /* Data */
+    L[1]  = o.numero || "";                                          /* OC / Invoice */
+    L[2]  = o.fornecedor || "";                                      /* Fornecedor */
+    L[3]  = d || (P ? String(P.nome).toUpperCase() : it.c);          /* Descricao */
+    L[4]  = "=XLOOKUP([@[Fornecedor:]],Listas!A:A,Listas!B:B,0)";    /* Origem */
+    L[5]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!C:C,0)"; /* SKU */
+    L[6]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!E:E,0)"; /* Leadtime */
+    L[7]  = it.qtd || 0;                                             /* Quantidade OC */
+    if (it.recebido) L[9] = it.recebido;                             /* Quantidade NF: o que ja veio */
+    L[10] = _serialExcel(it.prevista || o.data_prevista);            /* Previsao/ETA */
+    L[13] = "=[@[Entrega:]]-[@[Previsão/ETA:]]";                     /* atraso */
+    L[14] = '=IF([@[Status:]]="Entregue",[@[Entrega:]]-[@[Data:]],0)'; /* Leadtime real */
+    L[15] = "Pendente";                                              /* Status */
+    L[28] = obs;                                                     /* Observacoes */
+    return L;
+  });
+  if (!linhas.length) return { semCadastro };
+  await graphJson(wb + "/tables/" + TABELA_OC + "/rows/add", token, "POST", { index: null, values: linhas });
+  return { semCadastro };
+}
+/* ---------- grava em linhas que já existem na aba OC's ----------
+   mudancas: [{b, fp, rot, campos:{quantidade, data_prevista, status, data_entrega, nf, quantidade_nf}}]
+   Primeiro acha TODAS as linhas (pela posição e, se a posição não bate, pela impressão
+   digital); só depois grava. Grava célula a célula, então as fórmulas das outras colunas
+   (Origem, SKU, Leadtime, atraso, Leadtime real) ficam intactas. */
+async function gravarNaPlanilhaOC(mudancas){
+  if (!account || !msalInstance) throw new Error("sem login da Microsoft — entre de novo e tente outra vez");
+  const token = await getGraphToken();
+  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+  const t = await lerTabelaOC(token);
+  const corpo = t.valores.slice(1), idx = _idxOC(t.valores[0]);
+  const plano = [];
+  for (const m of mudancas){
+    let b = m.b;
+    if (_fpOC(corpo[b], idx) !== m.fp){
+      const achou = [];
+      corpo.forEach((r, j)=>{ if (_fpOC(r, idx) === m.fp) achou.push(j); });
+      if (achou.length !== 1) throw new Error("a linha de " + m.rot + " mudou na planilha depois da última leitura " +
+        "(alguém editou, apagou ou reordenou). Nada foi gravado: clique em Atualizar e refaça a alteração.");
+      b = achou[0];
+    }
+    const lin = t.lin0 + 1 + b;
+    for (const [k, v] of Object.entries(m.campos)){
+      if (idx[k] === undefined) throw new Error("não achei a coluna de " + k + " na aba OC's. Nada foi gravado.");
+      plano.push({ end: _colLetra(t.col0 + idx[k]) + lin, v: k.startsWith("data_") ? _serialExcel(v) : v });
+    }
+  }
+  if (!plano.length) return 0;
+  const ws = await graphJson(_wbUrl() + "/tables/" + TABELA_OC + "/worksheet?$select=id,name", token);
+  const bases = [_wbUrl() + "/worksheets/" + encodeURIComponent(ws.id),
+                 _wbUrl() + "/worksheets('" + encodeURIComponent(String(ws.name).replace(/'/g, "''")) + "')"];
+  let base = null, feitas = 0;
+  try {
+    for (const p of plano){
+      const corpoReq = { values: [[p.v]] };
+      if (!base){
+        let erro = null;
+        for (const b0 of bases){
+          try { await graphJson(b0 + "/range(address='" + p.end + "')", token, "PATCH", corpoReq); base = b0; break; }
+          catch(e){ erro = e; if (!/HTTP 40[04]/.test(String(e.message))) break; }
+        }
+        if (!base) throw erro;
+      } else {
+        await graphJson(base + "/range(address='" + p.end + "')", token, "PATCH", corpoReq);
+      }
+      feitas++;
+    }
+  } catch(e){
+    const err = new Error((feitas ? "gravei " + feitas + " de " + plano.length + " células e parei: " : "") + (e.message || e));
+    err.parcial = feitas; throw err;
+  }
+  return feitas;
+}
+
+/* depois de gravar: relê só a planilha e refaz a conta com o Kondado da última leitura */
+let ULTIMO_K = null;
+async function recarregarOCs(){
+  if (!ULTIMO_K){ await atualizar(); return; }
+  const token = await getGraphToken();
+  if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+  const ocs = await ocListOpen(token, siteIdCache);
+  pintaFonte(aplicarAoVivo(ULTIMO_K, ocs), ocs);
+  render();
+}
+/* devolve "" se releu, ou um aviso pronto (HTML) se a gravação foi mas a releitura não */
+async function depoisDeGravar(){
+  try { await recarregarOCs(); return ""; }
+  catch(e){ return "Gravado na planilha, mas não consegui reler agora (" + esc(String(e.message||e)) +
+                   "). Clique em <b>Atualizar</b> para a conta pegar a mudança."; }
+}
+
+/* as linhas da aba OC's agrupadas em OCs: mesmo nº e mesmo fornecedor */
+function gruposOC(){
+  const g = {};
+  ((DATA.ocs && DATA.ocs.todas) || []).forEach(l=>{
+    const o = g[l.key] || (g[l.key] = {key:l.key, numero:l.numero || "", fornecedor:l.fornecedor || "",
+                                       linhas:[], data_pedido:null});
+    o.linhas.push(l);
+    if (l.data_pedido && (!o.data_pedido || l.data_pedido < o.data_pedido)) o.data_pedido = l.data_pedido;
+  });
+  return Object.values(g).map(o=>{
+    const ab = o.linhas.filter(l => !l.fechada);
+    o.aberta = ab.length > 0;
+    o.falta = ab.reduce((a,l)=> a + l.falta, 0);
+    o.prevista = ab.map(l => l.data_prevista).filter(Boolean).sort()[0] || null;
+    o.entrega = o.linhas.map(l => l.data_entrega).filter(Boolean).sort().pop() || null;
+    o.situacao = o.aberta ? "aberta" : o.linhas.every(l => l.cancelada) ? "cancelada" : "entregue";
+    o.status_txt = [...new Set(ab.map(l => l.status_planilha).filter(Boolean))].join(" · ");
+    /* OC lançada pela torre sem o nº do Tiny nas observações: é a lista do que falta lançar no ERP */
+    o.semTiny = o.situacao !== "cancelada" && o.linhas.some(l => ocSemTiny(l));
+    return o;
+  });
+}
+function ocSemTiny(l){
+  const ob = String(l.obs || "");
+  return /lan[çc]ada pela torre/i.test(ob) && !/\bTiny\s+\S/i.test(ob);
+}
+/* nº da próxima OC: o maior nº da planilha + 1 (a planilha numera 86, 103, 235…) */
+function proximoNumeroOC(){
+  let n = 0;
+  ((DATA.ocs && DATA.ocs.todas) || []).forEach(l=>{
+    const m = /^\s*(\d+)\s*$/.exec(String(l.numero || "")); if (m) n = Math.max(n, +m[1]); });
+  return n ? String(n + 1) : proximoNumero("compra");
+}
+function avisoOC(tit, linhas){
+  document.getElementById("conf-t").textContent = tit;
+  document.getElementById("conf-s").innerHTML = linhas.filter(Boolean).join("<br><br>");
+  document.getElementById("confirma").hidden = false;
+}
+async function mandarOCPlanilha(o){
+  const cs = document.getElementById("conf-s");
+  const aviso = (html)=>{ if (cs && document.getElementById("conf-t")) cs.innerHTML += "<br><br>" + html; };
+  aviso('<span id="oc-planilha">Gravando na planilha de BI (aba OC\'s)…</span>');
+  const marca = (html)=>{ const el = document.getElementById("oc-planilha"); if (el) el.innerHTML = html; };
+  try {
+    const r = await escreverOCPlanilha(o);
+    o.planilha = { em: new Date().toISOString(), ok: true }; gravarOrdem(o.id);
+    marca("<b>Gravada na planilha de BI</b> (aba OC's)." + (r.semCadastro.length
+      ? " Atenção: " + r.semCadastro.map(esc).join(", ") + " não está na aba Produtos — a linha entrou, mas o SKU vai sair 0 até cadastrar lá."
+      : ""));
+  } catch(e){
+    o.planilha = { em: new Date().toISOString(), ok: false, erro: String(e.message||e) }; gravarOrdem(o.id);
+    marca('<b style="color:var(--red,#d33)">Não consegui gravar na planilha:</b> ' + esc(String(e.message||e)) +
+          ". A ordem ficou só na torre — lance a linha na aba OC's à mão.");
+  }
+}
+const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelado" && o.data_prevista && o.quantidade > 0;
+
+/* ---------- aplica o dado ao vivo em cima do catálogo da torre ----------
+   A lista de itens (acabado, kits, insumos, fichas) continua a da torre; o que
+   muda é saldo, reserva, venda de 30 e 90 dias e a chegada prevista. */
+function aplicarAoVivo(k, ocs){
+  if (BASE) voltarPraBase();
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const hojeIso = _isoDate(hoje);
+  DATA.gerado_em = hojeIso; HOJE_ISO = hojeIso;
+  MES_HOJE = hojeIso.slice(0,7); DIA_HOJE = hoje.getDate();
+  DIAS_MES = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate();
+  NF_ATE = (typeof k.nf_ate === "string" && /^\d{4}-\d{2}-\d{2}/.test(k.nf_ate)) ? k.nf_ate.slice(0,10) : null;
+  if (NF_ATE && NF_ATE.slice(0,7) === MES_HOJE) DIA_HOJE = Number(NF_ATE.slice(8,10));
+
+  /* venda mensal por NF (chave vmes do Worker): refaz a serie do grafico e o "vendas no mes".
+     Sem ela, a serie fica a gravada no arquivo — e o mes corrente para no dia da gravacao. */
+  const vm = {}, temVm = Array.isArray(k.vmes) && k.vmes.length > 0;
+  (k.vmes||[]).forEach(r => { if (!r.sku || !r.mes) return; (vm[r.sku] || (vm[r.sku] = {}))[r.mes] = _toNum(r.qtd); });
+  const mesesVivos = [];
+  if (temVm){ let [a, m] = BASE_INI.split("-").map(Number);
+    while (true){ const key = a+"-"+String(m).padStart(2,"0"); if (key > MES_HOJE) break; mesesVivos.push(key); if (++m > 12){ m = 1; a++; } } }
+
+  /* componente de ficha que veio do cadastro do Tiny e não está no catálogo gravado: entra de novo */
+  if (!ULTIMO_K) ULTIMO_K = k;
+  Object.keys(FICHAS).forEach(pai => (FICHAS[pai].itens || []).forEach(it => { if (!PORCOD[it.c]) garantirSku(it.c); }));
+  const est = {}, prod = {}, v30 = {}, v3m = {};
+  (k.produtos||[]).forEach(p => { if (p.codigo) prod[p.codigo] = p; });
+  (k.estoque||[]).forEach(r => { if (r.codigo) est[r.codigo] = r; });
+  /* aceita o nome de coluna das consultas de pedido (itens_codigo/qtd_30d) ou das de NF (sku/qtd) */
+  (k.v30||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v30[c] = (r.qtd_30d ?? r.qtd); });
+  (k.v3m||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v3m[c] = (r.qtd_3m ?? r.qtd); });
+
+  const cheg = {};
+  ocs.filter(ocAberta).forEach(o=>{
+    const a = cheg[o.sku];
+    if (!a || o.data_prevista < a.d) cheg[o.sku] = {d:o.data_prevista, q:_toNum(o.quantidade), f:o.fornecedor};
+    else if (o.data_prevista === a.d) a.q += _toNum(o.quantidade);
+  });
+
+  let atualizados = 0; const semKondado = [];
+  CHEG_BASE = {};
+  DATA.skus.forEach(s=>{
+    const e = est[s.codigo], p = prod[s.codigo];
+    if (!e && !p){ semKondado.push(s.codigo); s.saldo_vivo = false; }
+    else {
+      atualizados++;
+      if (p && p.nome) s.nome = p.nome;
+      if (e){ s.saldo = _toNum(e.saldo); s.reservado = _toNum(e.saldoreservado); }
+      s.saldo_vivo = !!e;
+      const q30 = _toNum(v30[s.codigo]), q3m = _toNum(v3m[s.codigo]), media = q3m / 3;
+      let dem = media, trocou = false, alta = false, queda = false;
+      if (media > 0){
+        if (q30 > 1.5 * media){ dem = q30; trocou = true; alta = true; }
+        else if (q30 <= 0.5 * media){ dem = q30; trocou = true; queda = true; }
+      }
+      s.q30 = q30; s.q90 = q3m; s.media_mes = media; s.venda_diaria = dem / 30;
+      s.trocou = s.usando_30d = trocou; s.gatilho_alta = alta; s.gatilho_queda = queda;
+      s.aceleracao = media > 0 ? q30 / media : (q30 === 0 ? null : Infinity);
+      s.sem_historico = s.aceleracao !== null && isFinite(s.aceleracao) && Math.abs(s.aceleracao - 3) < 0.005;
+      /* mês com ruptura não vale como queda: guarda a régua de 3 meses ao lado */
+      if (queda && media > 0){
+        const vd = media / 30, cob = s.saldo / vd;
+        const rup = maisDias(hojeIso, Math.round(Math.max(cob,0)));
+        s.alt3m = {media_mes: media, venda_diaria: vd, cobertura: cob, trocou: false, ruptura: rup,
+                   pedir_ate: maisDias(rup, -s.leadtime), risco: s.saldo < 0 || cob < s.alvo,
+                   sugestao: null, giro_baixo: cob > 365, sem_giro: false};
+      } else s.alt3m = null;
+    }
+    if (temVm){
+      const vivo = vm[s.codigo] || {}, ser = {};
+      Object.keys(s.serie || {}).forEach(m => { if (m < BASE_INI) ser[m] = s.serie[m]; });
+      mesesVivos.forEach(m => { ser[m] = vivo[m] || 0; });
+      s.serie = ser; s.mes_atual = ser[MES_HOJE] || 0;
+    }
+    const c = cheg[s.codigo];
+    s.chegada_data = c ? c.d : null; s.chegada_qtd = c ? c.q : null; s.chegada_forn = c ? c.f : null;
+    s.forn_atrasado = !!(c && c.d < hojeIso);
+    CHEG_BASE[s.codigo] = {d:s.chegada_data, q:s.chegada_qtd, f:s.chegada_forn, res:s.reservado || 0};
+  });
+  DATA.ocs = ocs;
+  AO_VIVO = true; IGNORA_SIM = false;
+  BASE = null;               /* a nova linha de base é a leitura de agora */
+  explodir();
+  acompanharRupturas(hojeIso);
+  return {atualizados, semKondado};
+}
+
+/* A ruptura detectada pelo saldo ganha data de início no primeiro dia em que aparece e, quando
+   o saldo volta, vira registro fechado (início → fim) com o motivo anotado. Sem isso o início
+   era sempre "hoje" e a ruptura sumia do histórico no dia em que acabava. */
+function acompanharRupturas(hoje){
+  let mudou = false;
+  DATA.skus.forEach(s=>{
+    const r = temReg(s.codigo);
+    if (s.em_ruptura){
+      if (!r || !r.rupAutoIni){ reg(s.codigo).rupAutoIni = hoje; mudou = true; }
+    } else if (r && r.rupAutoIni){
+      r.rupturas = r.rupturas || [];
+      r.rupturas.unshift({ini: r.rupAutoIni, fim: hoje, motivo: r.motivoAuto || "detectada pelo saldo", detectada: true});
+      r.rupAutoIni = null; r.motivoAuto = "";
+      mudou = true;
+    }
+  });
+  if (mudou) salvarReg();
+}
+/* ---------- MSAL ---------- */
+const MSAL_CDNS = [
+  "https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js",
+  "https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js",
+];
+function loadScriptOnce(url){
+  return new Promise((ok, fail)=>{ const s = document.createElement("script");
+    s.src = url; s.onload = ok; s.onerror = ()=>fail(new Error("falhou: " + url)); document.head.appendChild(s); });
+}
+async function ensureMsal(){
+  if (!window.msal){
+    let err = null;
+    for (const u of MSAL_CDNS){ try { await loadScriptOnce(u); if (window.msal) break; } catch(e){ err = e; } }
+    if (!window.msal) throw new Error("Não consegui carregar a biblioteca de login da Microsoft. " + (err ? err.message : ""));
+  }
+  if (!msalInstance){ msalInstance = new msal.PublicClientApplication(MSAL_CONFIG); await msalInstance.initialize(); }
+}
+let msalInstance = null, account = null, siteIdCache = null;
+async function getGraphToken(){
+  try { return (await msalInstance.acquireTokenSilent({ scopes: GRAPH_SCOPES, account })).accessToken; }
+  catch(e){ return (await msalInstance.acquireTokenPopup({ scopes: GRAPH_SCOPES })).accessToken; }
+}
+function showApp(){
+  document.getElementById("login-screen").hidden = true;
+  document.getElementById("login-user").textContent = account ? (account.name || account.username) : "";
+  USUARIO = account ? (account.name || account.username || "") : "";
+  atualizar();
+  ligarDb();
+}
+function showLogin(msg){
+  document.getElementById("login-screen").hidden = false;
+  document.getElementById("login-status").textContent = msg || "";
+}
+async function fazerLogin(){
+  const btn = document.getElementById("btn-login");
+  btn.disabled = true; document.getElementById("login-status").textContent = "Abrindo o login da Microsoft…";
+  try {
+    await ensureMsal();
+    const r = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
+    account = r.account; msalInstance.setActiveAccount(account);
+    showApp();
+  } catch(e){ document.getElementById("login-status").textContent = "Erro ao entrar: " + e.message; }
+  finally { btn.disabled = false; }
+}
+async function fazerLogout(){
+  const a = account; account = null; siteIdCache = null;
+  try { if (msalInstance && a) await msalInstance.logoutPopup({ account: a }); } catch(e){}
+  showLogin("");
+}
+async function initLogin(){
+  try {
+    await ensureMsal();
+    try { await msalInstance.handleRedirectPromise(); } catch(e){}
+    const contas = msalInstance.getAllAccounts();
+    if (contas.length){ account = contas[0]; msalInstance.setActiveAccount(account); showApp(); return; }
+  } catch(e){ showLogin(e.message); return; }
+  showLogin("");
+}
+
+/* ---------- Atualizar: Kondado + SharePoint ---------- */
+function pintaFonte(res, ocs){
+  const hm = new Date().toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit"});
+  document.getElementById("stamp").textContent = "Atualizado " + dbr(DATA.gerado_em) + " às " + hm + " · Kondado + SharePoint" +
+    (NF_ATE ? " · NF até " + dbr(NF_ATE).slice(0,5) : " · data da última NF não informada");
+  document.getElementById("nota-fonte").innerHTML =
+    "<b>Dado ao vivo.</b> Estoque, cadastro e venda (nota fiscal emitida) vêm do <b>Tiny via Kondado</b>; " +
+    "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>" + esc(DRIVE_ITEM_PATH.split("/").pop()) + "</b> no SharePoint (AREA_BI) " +
+    "e são editados na aba Pedidos. " +
+    res.atualizados + " itens atualizados · " + ocs.filter(ocAberta).length + " OCs em aberto" +
+    (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + "." +
+    (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
+      return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
+        ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
+}
+async function atualizar(){
+  const c = document.getElementById("carga"), btn = document.getElementById("btn-atualizar");
+  c.hidden = false; btn.disabled = true;
+  try {
+    if (!account) throw new Error("Faça login com a Microsoft primeiro.");
+    const token = await getGraphToken();
+    if (!siteIdCache) siteIdCache = await resolveSiteId(token);
+    const [k, ocs] = await Promise.all([
+      fetch(WORKER_URL).then(r => { if (!r.ok) throw new Error("Kondado (Worker) HTTP " + r.status); return r.json(); }),
+      ocListOpen(token, siteIdCache),
+    ]);
+    if (k.error) throw new Error("Kondado: " + k.error);
+    /* bloco que falta vira zero na conta — foi assim que a venda de 30 dias sumiu em 24/09 e
+       o catalogo inteiro ficou "sem giro". Faltando algum, nao atualiza nada e diz qual. */
+    const faltam = ["produtos","estoque","v30","v3m","vmes"].filter(c => !Array.isArray(k[c]) || !k[c].length);
+    if (faltam.length) throw new Error("o Worker não mandou " + faltam.join(", ") +
+      ". Sem isso a conta sairia com zero no lugar do dado, então nada foi atualizado e a tela segue com a leitura anterior.");
+    const res = aplicarAoVivo(k, ocs);
+    ULTIMO_K = k;
+    pintaFonte(res, ocs);
+    render();
+    /* e o que os outros salvaram (fichas, marcadores, OPs, registros) */
+    if (DB && DB.atualizar) DB.atualizar().catch(e=> statusDb("erro", String(e.message || e)));
+  } catch(e){
+    alert("Erro ao atualizar: " + e.message);
+  } finally { c.hidden = true; btn.disabled = false; }
+}
+document.getElementById("btn-atualizar").onclick = atualizar;
+document.getElementById("btn-login").onclick = fazerLogin;
+document.getElementById("btn-logout").onclick = fazerLogout;
+
+/* tema: sem escolha salva, segue o do sistema — mas marcado de vez no documento, para que todas
+   as regras de tema escuro valham já no primeiro login (antes, parte delas só valia depois do clique) */
+(function(){
+  const r = document.documentElement;
+  if (!r.getAttribute("data-theme")){
+    const esc0 = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    r.setAttribute("data-theme", esc0 ? "dark" : "light");
+  }
+  const b = document.getElementById("btn-theme");
+  if (b) b.textContent = r.getAttribute("data-theme") === "dark" ? "Tema claro" : "Tema escuro";
+})();
+explodir();
+document.documentElement.setAttribute("data-aba", state.aba);
+render();
+ligarDb();
+/* a cada 2 min relê o que os outros salvaram — mas nunca no meio de uma edição */
+setInterval(()=>{
+  if (!DB || !DB.atualizar || document.hidden) return;
+  const f = document.activeElement;
+  if (state.ped.form || state.ped.oc || state.ped.receb || ABERTO || (f && /^(INPUT|TEXTAREA|SELECT)$/.test(f.tagName))) return;
+  DB.atualizar().catch(()=>{});
+}, 120000);
+initLogin();
+
+</script>
+
+</body></html>
