@@ -874,6 +874,10 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
   font-size:11.6px;color:var(--amber)}
 .olin-vinc>div{flex:1;min-width:220px}
 .olin-vinc b{font-weight:600}
+:root:not([data-vivo="1"]) #painel-estoque,:root:not([data-vivo="1"]) #painel-pedidos{display:none!important}
+.fabsel{background:var(--bg);border:1px solid var(--border-strong);border-radius:6px;padding:5px 8px;font:inherit;font-size:12.4px;color:var(--text);max-width:100%}
+.fqun{display:inline-flex;align-items:center;gap:5px}
+.fqun em{font-style:normal;font-size:10.6px;color:var(--muted);min-width:22px}
 .rot-loc{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);margin:20px 0 8px}
 @media (max-width:700px){
   .olin{grid-template-columns:1fr 1fr 30px}
@@ -1089,7 +1093,7 @@ body.combarra{padding-bottom:var(--folga-barra,104px)}
       <span class="cao" id="cao-topo" data-cao="trabalho" style="--h:108px;--traco:var(--azul);--corpo:var(--creme)" aria-hidden="true"><i class="cheio"></i><i class="corpo"></i></span>
     </div>
     <div class="head-actions">
-      <span class="stamp" id="stamp">Foto gravada · saldo de 14/09 · NF até 15/09 — clique em Atualizar</span>
+      <span class="stamp" id="stamp">Sem leitura ao vivo ainda — entre com a Microsoft e clique em Atualizar</span>
       <button class="btn ajuda-top" id="btn-situacoes" title="O que cada selo e cada ícone querem dizer">?</button>
       <button class="btn" id="btn-regras"><svg class="ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 3.5v6M6 13.5v7M12 3.5v10M12 17.5v3M18 3.5v3.5M18 11v9.5"/><path d="M6 9.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/><path d="M12 13.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/><path d="M18 7a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>Decisões</button>
       <button class="btn" id="btn-theme">Tema escuro</button>
@@ -1113,14 +1117,8 @@ body.combarra{padding-bottom:var(--folga-barra,104px)}
 <div class="note">
   <span>▲</span>
   <div><span id="nota-fonte">Carregando dado ao vivo do Kondado e do SharePoint…</span>
-  As réguas de cálculo e o que falta construir estão em <b>Decisões</b>.
-  <br><b>Novo em 21/09 — entrou a carga do export.</b> <b>36 fichas técnicas</b> e <b>75 componentes</b> reais do cadastro do Tiny: a demanda de cada insumo é explodida
-  dos pais que o consomem — e agora em <b>vários níveis</b>, porque o export revelou bisnaga dentro de avulso dentro de kit. Cada produto com ficha ganhou o <b>montável</b> dentro da cobertura.
-  <b>A carga entrou inteira como rascunho</b>: o export não trouxe coluna de quantidade, então todo componente entrou como 1 — e já sabemos que o Pente Y do Kit Lifting é 2.
-  Use a <b>fila de homologação</b> no painel de fichas para conferir uma a uma, das que mais vendem para as que menos vendem.
-  Ficaram de fora, por decisão: quatro linhas marcadas "CRIAR", a bisnaga sem cadastro, a cola SM Lash Speed com SKU "00" e o <b>CRT00010</b>, que não existe no Tiny (parece dedo trocado em CRT0010).
-  Os cadastros fantasma (PSA0001 e PSA0005) continuam na lista de propósito, para o pente fino.
-  <b>Pedidos</b> já registra <b>ordem de compra</b>: fornecedor puxado das notas de entrada, itens com a sugestão da torre, data prevista à mão, e recebimento com parcial, falta e sobra. A ordem conta na cobertura na hora. A <b>ordem de produção</b> também: ela <b>segura os componentes</b> que vai consumir, some do montável dos outros kits e entra como chegada do produto que monta. E o botão da gaveta de cada produto abre uma <b>mini janela</b> que já sabe se o caso é compra ou produção.</div>
+  As réguas de cálculo estão em <b>Decisões</b>.
+</div>
 </div>
 
 <div id="painel-estoque">
@@ -1481,7 +1479,7 @@ function comLead(s, lt){
   else if (s.chegada_data < DATA.gerado_em) o.risco = true;
   else                                  o.risco = s.chegada_data > s.ruptura;
   o.sugestao = (s.venda_diaria > 0 && (o.risco || s.cobertura < alvo))
-    ? Math.max(0, Math.round(s.venda_diaria * (lt + alvo) - s.saldo - (s.chegada_qtd || 0)))
+    ? Math.max(0, Math.round(s.venda_diaria * alvo - s.saldo - (s.chegada_qtd || 0)))   /* alvo = leadtime + segurança */
     : null;
   return o;
 }
@@ -1941,19 +1939,24 @@ function mexeu(pai, revisar){
 const PORCOD = {}; DATA.skus.forEach(s => PORCOD[s.codigo] = s);
 
 function recalcular(s){
+  if (s.sem_leitura){
+    s.base_cobertura = 0; s.cobertura = null; s.ruptura = null; s.pedir_ate = null; s.sugestao = null;
+    s.sem_giro = !(s.venda_diaria > 0); s.giro_baixo = false; s.em_ruptura = false; s.risco = false; s.saldo_negativo = false;
+    return;
+  }
   const base = s.saldo + (s.montavel || 0);
   s.base_cobertura = base;
   s.saldo_negativo = s.saldo < 0;
   if (!(s.venda_diaria > 0)){
     s.cobertura = null; s.ruptura = null; s.pedir_ate = null; s.sugestao = null;
-    s.sem_giro = true; s.em_ruptura = s.saldo <= 0;
+    s.sem_giro = true; s.em_ruptura = s.saldo <= 0;   /* ruptura = saldo físico zero (ou negativo), sempre */
     s.risco = s.saldo < 0;      /* vendeu o que nao tinha: a regra do saldo negativo vale aqui tambem */
     return;
   }
   s.sem_giro = false;
   s.cobertura = base / s.venda_diaria;
   s.giro_baixo = s.cobertura > 365;
-  s.em_ruptura = base <= 0;
+  s.em_ruptura = s.saldo <= 0;
   s.ruptura = maisDias(DATA.gerado_em, Math.round(s.cobertura));
   Object.assign(s, comLead(s, s.leadtime));
   if (s.montavel !== undefined){
@@ -1962,7 +1965,7 @@ function recalcular(s){
       s.risco = (s.cobertura < s.alvo) &&
                 (!s.chegada_data || s.chegada_data < DATA.gerado_em || s.chegada_data > s.ruptura);
     s.sugestao = (s.risco || s.cobertura < s.alvo)
-      ? Math.max(0, Math.round(s.venda_diaria * (s.leadtime + s.alvo) - base - (s.chegada_qtd || 0)))
+      ? Math.max(0, Math.round(s.venda_diaria * s.alvo - base - (s.chegada_qtd || 0)))
       : null;
   }
 }
@@ -2066,12 +2069,13 @@ function aplicarOrdens(){
 }
 
 /* quanto o produto pode ser montado hoje, ja descontadas as OPs em aberto */
-function montavelDe(cod){
+function montavelDe(cod, fab){
   const f = FICHAS[cod]; if (!f || !(f.itens||[]).length) return {qtd:0, trava:null};
+  if (fab === undefined) fab = fabDaFicha(cod);
   let min = Infinity, trava = null;
   (f.itens||[]).filter(it => it.c !== cod).forEach(it=>{
     const r = PORCOD[it.c];
-    const da = r ? Math.max(0, Math.floor(r.disponivel / (it.q||1))) : 0;
+    const da = r ? Math.max(0, Math.floor(dispEm(r, fab) / (it.q||1))) : 0;
     if (da < min){ min = da; trava = it.c; }
   });
   return {qtd: min === Infinity ? 0 : min, trava: trava};
@@ -2172,7 +2176,7 @@ function explodir(){
     let min = Infinity, trava = null;
     P.comp = itens.map(it=>{
       const r = PORCOD[it.c];
-      const da = r ? Math.max(0, Math.floor(r.disponivel / it.q)) : 0;
+      const da = r ? Math.max(0, Math.floor(dispEm(r, fabDaFicha(cod)) / it.q)) : 0;
       if (da < min){ min = da; trava = it.c; }
       return {codigo:it.c, qtd:it.q, da:da, ref:r};
     });
@@ -2264,12 +2268,9 @@ function renderFiltros(){
     state.escopo = e; state.cat = null; state.sub = null; state.marca = null;
     state.ordem = "urgencia"; state.asc = false; render(); };
   if (state.aba === "mp"){
-    fe.append(chip("Componentes de kit", nEsc("insumo"), true, ()=>{}));
-    fe.append(chip("Demais insumos e embalagens", 44, false, null, "", true));
+    fe.append(chip("Matéria-prima e embalagem", nEsc("insumo"), true, ()=>{}));
   } else {
     fe.append(chip("Produto acabado", nEsc("acabado"), true, ()=>{}));
-    fe.append(chip("Marketing e brinde", 87, false, null, "", true));
-    fe.append(chip("Unhas (Brilia)", 96, false, null, "", true));
   }
 
   /* chip de marcador: clicar liga e desliga o filtro; o ✕ apaga o marcador
@@ -2545,7 +2546,8 @@ function renderTabela(){
       '<td class="l"><div class="pname">'+esc(titulo(s.nome))+'</div><div class="psku"><span class="mono">'+
         esc(s.codigo||"(sem código)")+'</span> · <span class="origem">'+
         icon(s.origem==="0"?"nacional":"importado",13)+esc(s.origem_label)+'</span></div></td>'+
-      '<td class="num">'+nf(s.saldo)+'</td>'+
+      '<td class="num">'+nf(s.saldo)+(s.saldo_ext ? '<div class="psku num" title="'+esc(Object.entries(s.fab||{}).map(([d,v])=>fabRot(d)+": "+nf(v)).join(" · "))+'">'+
+        nf(s.saldo_geral)+' em casa · '+nf(s.saldo_ext)+' na fábrica</div>' : '')+'</td>'+
       '<td class="num dim">'+nf(s.disponivel)+'</td>'+
       '<td><div class="cov"><span class="num">'+(s.cobertura===null?'<span class="dim">–</span>':nf(s.cobertura)+" d")+
         '</span><span class="covbar">'+barra+'</span>'+legBar+
@@ -2629,12 +2631,10 @@ function explicacao(s){
   if (s._alt) L.push("Há ruptura no período, então a régua voltou para a média de 3 meses — o mês sem produto não vale como queda de demanda.");
   L.push("Demanda considerada: " + (
       (s.vd_explodida||0) > 0 ? "venda avulsa ("+fx(s.vd_propria||0)+"/dia) + consumo nas fichas homologadas ("+fx(s.vd_explodida)+"/dia)"
-    : s._alt ? "a média dos últimos 3 meses ("+nf(s.media_mes)+" un./mês)"
-    : s.gatilho_alta ? "os últimos 30 dias ("+nf(s.q30)+" un.), porque passaram de 1,5× a média de 3 meses"
-    : s.gatilho_queda ? "os últimos 30 dias ("+nf(s.q30)+" un.), porque ficaram em metade ou menos da média de 3 meses"
-    : "a média dos últimos 3 meses ("+nf(s.media_mes)+" un./mês)") + " → " + s.venda_diaria.toFixed(1) + " un. por dia.");
-  if (s.sem_historico)
-    L.push("Sem histórico: toda a venda do trimestre aconteceu no último mês, então 3,00x é o teto da conta, não explosão de demanda.");
+    : "a média de "+(s.meses_media || "3 meses fechados")+" ("+nf(s.media_mes)+" un./mês)") + " → " + s.venda_diaria.toFixed(1) + " un. por dia." +
+    (s.gatilho_alta ? " Alerta: os últimos 30 dias ("+nf(s.q30)+" un.) passaram de 1,5× a média — a conta segue pela média."
+     : s.gatilho_queda ? " Alerta: os últimos 30 dias ("+nf(s.q30)+" un.) ficaram em metade ou menos da média — a conta segue pela média." : ""));
+
   L.push("Cobertura: "+nf(s.cobertura)+" dias de estoque físico"+(s.montavel ? " + montável" : "")+" no ritmo atual (alvo "+s.alvo+" dias, "+s.origem_label.toLowerCase()+").");
   L.push(s.chegada_data ? "Próxima chegada: "+dbr(s.chegada_data)+" · "+nf(s.chegada_qtd)+" un. de "+s.chegada_forn+"."
                         : "Não há pedido de compra em aberto para este SKU.");
@@ -2966,8 +2966,10 @@ function abrirSku(s0){
   document.getElementById("d-body").innerHTML =
     '<div class="dgrid">'+
       '<div class="dcell"><div class="k">Saldo físico</div><div class="v num">'+nf(s.saldo)+'</div>'+
-        '<div class="ds">'+(s0.saldo_vivo === false ? 'não veio do Kondado · valor da foto gravada'
-          : 'no Tiny, em '+dbr(DATA.gerado_em).slice(0,5))+'</div></div>'+
+        '<div class="ds">'+(s0.saldo_vivo === false ? 'o Kondado não traz saldo deste produto — fica fora da conta'
+          : s0.saldo_ext ? '<b>'+nf(s0.saldo_geral)+'</b> em casa · '+Object.entries(s0.fab||{}).filter(([,v])=>v)
+              .map(([d,v])=>'<b>'+nf(v)+'</b> na '+esc(fabRot(d))).join(' · ')
+          : 'em casa (Geral), no Tiny em '+dbr(DATA.gerado_em).slice(0,5))+'</div></div>'+
       '<div class="dcell"><div class="k">Reservado</div><div class="v num">'+nf(s.reservado)+'</div>'+
         '<div class="ds">'+((s0.reservado_op > 0)
           ? nf(s0.reservado_tiny)+' em pedido de venda + <b>'+nf(s0.reservado_op)+' preso em OP</b>'
@@ -2982,8 +2984,7 @@ function abrirSku(s0){
       '<div class="dcell"><div class="k">'+((s.vd_explodida||0) > 0 ? 'Demanda mensal' : 'Média mensal')+'</div>'+
         '<div class="v num">'+nf(s.media_mes)+'</div>'+
         '<div class="ds">'+((s.vd_explodida||0) > 0 ? 'venda avulsa + consumo nas fichas homologadas'
-          : (s.trocou && !s._alt) ? 'média dos 3 meses · a conta usa os últimos 30 d ('+nf(s.q30)+')'
-          : 'média dos 3 meses')+'</div></div>'+
+          : 'média de '+esc(s0.meses_media || 'jul, ago, set')+' (meses fechados)')+'</div></div>'+
       '<div class="dcell"><div class="k">Aceleração</div><div class="v num acc">'+icon(ritmo(s),15)+
         (s.aceleracao===null?"–":fx(s.aceleracao)+"x")+
         (s.trocou?'<span class="trg">'+icon("regua-trocada",12)+'</span>':'')+'</div>'+
@@ -2996,11 +2997,11 @@ function abrirSku(s0){
             '<div class="v num">'+s.leadtime+'<span class="un"> dias</span></div>'+
             '<div class="ds">'+s.lead_componente+' d do componente mais lento ('+
             esc(s.lead_quem||"–")+') + '+s.montagem+' d de montagem</div></div>'
-        : '<div class="dcell lead'+(temLead?" posto":" falta")+'"><div class="k">Leadtime do fornecedor</div>'+
+        : '<div class="dcell lead'+(temLead?" posto":"")+'"><div class="k">Leadtime do fornecedor</div>'+
             '<div class="v num">'+lead+'<span class="un"> dias</span></div>'+
             '<div class="ds">'+(temLead
               ? 'preenchido por '+esc(regLead.quemLead || USUARIO)+' em '+dbr(regLead.quandoLead || HOJE_ISO)
-              : 'padrão assumido — este SKU ainda não tem leadtime próprio')+'</div></div>')+
+              : 'padrão da torre')+'</div></div>')+
       '<div class="dcell"><div class="k">Próxima chegada</div><div class="v num">'+
         (s.chegada_data ? dbr(s.chegada_data).slice(0,5) : '<span class="dim">–</span>')+'</div>'+
         '<div class="ds">'+(s.chegada_data ? nf(s.chegada_qtd)+' un.'+(diasAte(s.chegada_data)<0?' · vencida':'') : 'sem pedido em aberto')+'</div></div>'+
@@ -3180,7 +3181,11 @@ const REGRAS = [
  ["Montável usa disponível, não físico","A unidade de componente que já está reservada tem dono e vai sair, então não pode ser contada como kit montável. Isso é o contrário da régua de cobertura do produto acabado, que hoje usa o saldo físico — as duas decisões precisam ser tomadas juntas.","decidir · 17/09"],
  ["Kit e produto pai não entram","Pela marcação do próprio ERP (classe_produto K e V): 46 kits e 4 produtos pai saem, porque o estoque deles é o dos componentes.","a aprovar"],
  ["Tudo em dias corridos","Mês = 30 dias. Leadtime 63 dias (eram 45 úteis). Alvo 84 dias nacional e 126 importado (eram 60 e 90 úteis).","a aprovar"],
- ["Demanda base","Média dos últimos 3 meses — exceto quando os últimos 30 dias passam de 1,5× essa média; aí vale o mês mais recente.","a aprovar"],
+ ["Demanda base","Média da NF dos 3 meses fechados (em outubro: julho, agosto e setembro); o mês atual não entra. A conta usa sempre a média; os últimos 30 dias aparecem só como alerta de aceleração.","aprovado 01/10"],
+ ["Sugestão de compra","Cobre leadtime + segurança (importado 63 + 63 = 126 dias, nacional 63 + 21 = 84), menos o saldo e o que já está a caminho.","aprovado 01/10"],
+ ["Ruptura","Marcador de ruptura só com saldo físico zero (ou negativo), em qualquer produto.","aprovado 01/10"],
+ ["Estoque nas fábricas","O saldo dos depósitos das fábricas terceiras (Doctor Hair, Cosmolife, DBE, Chams) soma no saldo físico e conta na cobertura. No montável, cada ficha e cada OP dizem onde o produto é montado: vale o que está em casa e naquela fábrica.","aprovado 01/10"],
+ ["Catálogo do Tiny","A lista de produtos vem do cadastro do Tiny a cada Atualizar: ativo, categoria 1 a 4 = produto acabado, categoria 0 ou classe M = matéria-prima. Sem saldo no Kondado = sem leitura, fora da conta — nada de valor gravado.","aprovado 01/10"],
  ["Cobertura — físico ou disponível?","Hoje a conta é saldo FÍSICO ÷ venda diária: o reservado ainda está no depósito. Só que 52 dos 58 SKUs têm reserva, e a unidade reservada já tem dono — vai sair, e a venda que ela atende ainda nem entrou na média, porque a média é de nota fiscal emitida. Usando o disponível, a cobertura da Cola Oxe cai de 62 para 46 dias, a da Fast de 61 para 41, e os itens em risco vão de 30 para 32. Contra: pedido reservado pode cancelar e a unidade volta. Precisa de uma decisão do time — e a sugestão de compra, que também parte do físico, tem que seguir a mesma escolha.","decidir · 16/09"],
  ["Giro baixo","Cobertura acima de 12 meses (365 dias). Sai da régua de risco e desce na lista.","aprovado 13/09"],
  ["Sem giro","Zero venda em 3 meses. Sem cobertura calculável, fica fora da régua.","a aprovar"],
@@ -3435,7 +3440,7 @@ function pintaMini(){
       const f = FICHAS[s0.codigo];
       ORDENS[id] = {id:id, tipo:"producao", numero:proximoNumero("producao"), numero_tiny:"",
         produto:s0.codigo, qtd:q, feito:0,
-        comp:(f.itens||[]).map(it=>({c:it.c, q:it.q||1})),
+        comp:(f.itens||[]).map(it=>({c:it.c, q:it.q||1})), fabrica: f.fabrica || "",
         montagem:(f.montagem != null) ? f.montagem : 2, ficha_estado:f.estado,
         obs:"", data_pedido:HOJE_ISO, data_prevista:d, status:"aberta", por:USUARIO, em:HOJE_ISO};
     } else {
@@ -3645,7 +3650,7 @@ function renderPedidos(){
         (!o.numero_tiny && o.status!=="cancelada" ? '<span class="sit tiny">sem nº no Tiny</span>' : '')+
         (!prod ? '<span class="sit tiny">fora da planilha</span>' : '')+'</span>'+
       '<span class="f"><b>'+esc(prod ? (pr ? titulo(pr.nome) : o.produto) : (o.fornecedor||"sem fornecedor"))+'</b>'+
-        '<span class="it">'+esc(nomes.slice(0,2).join(" · "))+
+        '<span class="it">'+(prod ? '<b>'+esc(o.fabrica ? fabRot(o.fabrica) : "local não definido")+'</b> · ' : '')+esc(nomes.slice(0,2).join(" · "))+
         (nomes.length>2 ? " · +"+(nomes.length-2) : "")+'</span></span>'+
       '<span class="q">'+nf(falta)+'<span class="un"> un. '+(prod?'a montar':'a chegar')+'</span></span>'+
       '<span class="d">'+(o.status==="aberta"
@@ -4238,6 +4243,7 @@ function preencheOP(o, cod){
   o.comp = ((f && f.itens) || []).map(it=>({c:it.c, q:it.q||1}));
   o.montagem = (f && f.montagem != null) ? f.montagem : 2;
   o.data_prevista = maisDias(HOJE_ISO, o.montagem);
+  o.fabrica = (f && f.fabrica) || o.fabrica || "";
   if (!o.qtd && P) o.qtd = Math.max(1, ef(P).sugestao || montavelDe(cod).qtd || 1);
   o.ficha_estado = f ? f.estado : null;
 }
@@ -4246,7 +4252,7 @@ function telaOrdemOP(){
   const o = state.ped.form;
   const box = document.createElement("div");
   const P = o.produto ? PORCOD[o.produto] : null;
-  const m = o.produto ? montavelDe(o.produto) : {qtd:0, trava:null};
+  const m = o.produto ? montavelDe(o.produto, o.fabrica) : {qtd:0, trava:null};
   const tr = m.trava ? PORCOD[m.trava] : null;
   const excede = o.qtd > m.qtd;
   const jaExiste = !!ORDENS[o.id];
@@ -4257,13 +4263,14 @@ function telaOrdemOP(){
   const comps = (o.comp||[]).map(c=>{
     const r = PORCOD[c.c];
     const total = (o.qtd||0) * (c.q||1);
-    const falta = r ? total - r.disponivel : total;
+    const dl = dispEm(r, o.fabrica);
+    const falta = r ? total - dl : total;
     return '<div class="oitem comp">'+
       '<span class="nm"><b>'+esc(r?titulo(r.nome):c.c)+'</b>'+
         '<span class="mono">'+esc(c.c)+'</span></span>'+
       '<span class="ct">'+c.q+' por un.</span>'+
       '<span class="ct"><b>'+nf(total)+'</b> no total</span>'+
-      '<span class="ct '+(falta>0?"c-red":"")+'">'+(r ? nf(r.disponivel)+' disp.' : 'SKU fora')+
+      '<span class="ct '+(falta>0?"c-red":"")+'">'+(r ? nf(dl)+' disp.'+(o.fabrica && o.fabrica !== "__geral" ? ' (casa + '+esc(fabRot(o.fabrica))+')' : '') : 'SKU fora')+
         (falta>0 ? ' · faltam '+nf(falta) : '')+'</span>'+
     '</div>';
   }).join("");
@@ -4277,6 +4284,8 @@ function telaOrdemOP(){
           '<em>só produtos com ficha técnica cadastrada</em></label>'+
         '<label class="ocampo"><span>Quantidade</span>'+
           '<input type="number" min="1" step="1" value="'+(o.qtd||1)+'" id="p-qtd"></label>'+
+        '<label class="ocampo"><span>Onde é produzida</span>'+selFabrica("p-fab", o.fabrica, "não definido")+
+          '<em>a fábrica (depósito do Tiny) onde a OP acontece</em></label>'+
         '<label class="ocampo"><span>Nº da ordem</span>'+
           '<input type="text" value="'+esc(o.numero)+'" id="p-num"></label>'+
         '<label class="ocampo"><span>Nº no Tiny</span>'+
@@ -4330,6 +4339,8 @@ function telaOrdemOP(){
     });
     const q = box.querySelector("#p-qtd");
     if (q) q.oninput = ()=>{ o.qtd = Math.max(0, Math.floor(Number(q.value)||0)); renderPedidos(); };
+    const pf = box.querySelector("#p-fab");
+    if (pf) pf.onchange = ()=>{ o.fabrica = pf.value; renderPedidos(); };
     box.querySelector("#o-voltar").onclick = ()=>{ state.ped.form = null; renderPedidos(); };
     box.querySelector("#p-sair").onclick = ()=>{ state.ped.form = null; renderPedidos(); };
     const fila = box.querySelector("#p-fila");
@@ -4672,6 +4683,8 @@ function estadoFicha(cod){
 }
 const SELO = {sem:['s-sem','sem ficha'], rascunho:['s-rasc','rascunho'], completa:['s-comp','completa']};
 
+/* quantidade de ficha: aceita vírgula e casas decimais (ml de granel, g de pó…) */
+const numFicha = v => { const n = Number(String(v ?? "").replace(",", ".")); return isFinite(n) ? Math.round(n * 10000) / 10000 : NaN; };
 function editorFicha(P){
   const cod = P.codigo;
   const f = FICHAS[cod] || {itens:[], estado:"rascunho"};
@@ -4685,7 +4698,8 @@ function editorFicha(P){
         (outros.length ? ' <span class="selo s-rasc">também em '+outros.length+
           (outros.length===1?' produto':' produtos')+'</span>' : '')+'</span>'+
       '<span class="disp">'+(r ? nf(r.disponivel)+' disp.' : 'SKU não encontrado')+'</span>'+
-      '<input type="number" min="1" step="1" value="'+it.q+'" data-q="'+esc(cod)+'|'+i+'" aria-label="quantidade por unidade">'+
+      '<span class="fqun"><input type="number" min="0" step="any" value="'+it.q+'" data-q="'+esc(cod)+'|'+i+'" aria-label="quantidade por unidade">'+
+        '<em>'+esc((r && r.unidade) || "UN")+'</em></span>'+
       '<button class="lixo" data-del="'+esc(cod)+'|'+i+'" aria-label="Remover componente">'+icon("lixo",15)+'</button>'+
     '</div>';
   }).join("") : '<p class="dim" style="padding:12px 0;font-size:12.4px">'+
@@ -4697,9 +4711,11 @@ function editorFicha(P){
     '<div class="fadd">'+
       '<div class="rot">Acrescentar componente</div>'+
       '<div data-busca="'+esc(cod)+'"></div>'+
-      '<input type="number" min="1" step="1" value="1" data-qnovo="'+esc(cod)+'" aria-label="Quantidade por unidade">'+
+      '<input type="number" min="0" step="any" value="1" data-qnovo="'+esc(cod)+'" aria-label="Quantidade por unidade" title="na unidade do Tiny (UN, ML, G…); aceita casas decimais">'+
     '</div>'+
     '<div class="ftrava" id="trava-'+esc(cod)+'" hidden></div>'+
+    '<label class="fmont">Onde é montado '+selFabrica("fab-"+esc(cod), f.fabrica, "não definido — conta o saldo de todos os lugares")+
+      ' <span>o montável só conta o componente que está em casa e nesse lugar</span></label>'+
     '<label class="fmont">Dias de montagem <input type="number" min="0" step="1" value="'+
       (f.montagem != null ? f.montagem : 2)+'" data-mont="'+esc(cod)+'"> '+
       '<span>somados ao maior leadtime entre os componentes</span></label>'+
@@ -4823,10 +4839,10 @@ function ligarFichas(raiz){
       itens: ()=> DATA.skus.filter(x => !podeEntrar(pai, x.codigo)).map(itemBusca).concat(extrasDoTiny(pai)),
       aoEscolher: comp=>{
         const qi = raiz.querySelector('[data-qnovo="'+CSS.escape(pai)+'"]');
-        const q = Math.floor(Number(qi ? qi.value : 1));
+        const q = numFicha(qi ? qi.value : 1);
         const tr = document.getElementById("trava-"+pai);
         const erro = podeEntrar(pai, comp) || (q > 0 ? null :
-          "A quantidade tem que ser um número inteiro maior que zero.");
+          "A quantidade tem que ser maior que zero (na unidade do Tiny; aceita casas decimais).");
         if (erro){ if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>"+esc(erro)+"</span>"; } return; }
         if (!PORCOD[comp]) garantirSku(comp);
         if (!FICHAS[pai]) FICHAS[pai] = {itens:[], estado:"rascunho", por:USUARIO, em:HOJE_ISO, revisar:false};
@@ -4863,14 +4879,18 @@ function ligarFichas(raiz){
   raiz.querySelectorAll("[data-q]").forEach(inp=>{
     inp.onchange = ()=>{
       const a = inp.dataset.q.split("|"), pai = a[0], i = +a[1];
-      const v = Math.floor(Number(inp.value));
+      const v = numFicha(inp.value);
       const tr = document.getElementById("trava-"+pai);
       if (!(v > 0)){
-        if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>A quantidade tem que ser um número inteiro maior que zero. Em branco não vale — ficha sem quantidade erra o montável em silêncio.</span>"; }
+        if (tr){ tr.hidden = false; tr.innerHTML = "<span>✕</span><span>A quantidade tem que ser maior que zero. Em branco não vale — ficha sem quantidade erra o montável em silêncio.</span>"; }
         inp.value = FICHAS[pai].itens[i].q; return;
       }
       FICHAS[pai].itens[i].q = v; mexeu(pai, true);
     };
+  });
+  raiz.querySelectorAll("select.fabsel[id^='fab-']").forEach(sel=>{
+    sel.onchange = ()=>{ const pai = sel.id.slice(4); if (!FICHAS[pai]) return;
+      FICHAS[pai].fabrica = sel.value; mexeu(pai, false); };
   });
   raiz.querySelectorAll("[data-mont]").forEach(inp=>{
     inp.onchange = ()=>{
@@ -5057,7 +5077,7 @@ function abrirPopLead(pop, sel){
   pop.innerHTML =
     '<h4>'+icon("ajustes",14)+'Ajustar leadtime · '+sel.length+' selecionado'+(sel.length===1?'':'s')+'</h4>'+
     '<p class="hoje">Hoje: <b>'+padrao+'</b> no padrão de '+DATA.leadtime+' d'+
-      (proprios.length ? ' · <b>'+proprios.length+'</b> com leadtime próprio ('+valores.join(' e ')+' d)' : '')+'</p>'+
+      (proprios.length ? ' · <b>'+proprios.length+'</b> com leadtime alterado ('+valores.join(' e ')+' d)' : '')+'</p>'+
     '<div class="campo"><input type="number" id="sb-lead-in" min="1" max="365" step="1" value="'+
       DATA.leadtime+'" aria-label="novo leadtime em dias"><span class="dim">dias corridos</span></div>'+
     '<div class="sbprev" id="sb-prev"></div>'+
@@ -5520,6 +5540,110 @@ const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelad
 /* ---------- aplica o dado ao vivo em cima do catálogo da torre ----------
    A lista de itens (acabado, kits, insumos, fichas) continua a da torre; o que
    muda é saldo, reserva, venda de 30 e 90 dias e a chegada prevista. */
+/* O catálogo sai do cadastro do Tiny (chave produtos do Worker), não mais da foto gravada no
+   arquivo: produto ativo, categoria 1 a 4 = produto acabado, categoria 0 ou classe M = matéria-
+   prima; classe K (kit) e V (pai) aparecem fora da conta. Produto de outra categoria que entra em
+   alguma ficha também vem, como insumo. Mudou o código, a categoria ou a origem no Tiny: muda aqui. */
+/* Código antigo → código novo no Tiny. A venda por NF anterior à troca está no código antigo;
+   ela soma no novo, e ficha, registro e OC que ainda usem o antigo passam para o novo. */
+const DEPARA = {
+  "HLD-BP-NN-ESPUMA-150ml":    "PA0001",   /* Espuma Arretada 150ml */
+  "HLD-BPNN-FINALIZADOR-50ML": "PA0002",   /* Finalizador Norte Nordeste 50ml */
+  "HLD-BPNN-PRIMER-50ML":      "PA0003",   /* Primer Norte Nordeste 50ml */
+  "HLD-BP-NN-SERUM-5ML":       "PA0004",   /* Sérum Arretado 5ml */
+  "HLD-BP-DESC-20ML":          "PA0006",   /* Descolorante 20ml */
+};
+const codNovo = c => DEPARA[c] || c;
+function migrarCodigos(){
+  Object.entries(DEPARA).forEach(([velho, novo])=>{
+    if (FICHAS[velho]){
+      if (!FICHAS[novo]){ FICHAS[novo] = FICHAS[velho]; gravarFicha(novo); }
+      delete FICHAS[velho]; apagarFicha(velho);
+    }
+    if (REG[velho]){ if (!REG[novo]) REG[novo] = REG[velho]; delete REG[velho]; }
+  });
+  Object.keys(FICHAS).forEach(pai=>{
+    let mudou = false;
+    (FICHAS[pai].itens || []).forEach(it=>{ if (DEPARA[it.c]){ it.c = DEPARA[it.c]; mudou = true; } });
+    if (mudou) gravarFicha(pai);
+  });
+  salvarFichas(); salvarReg();
+}
+/* Estoque em fábrica terceira: no Tiny cada fábrica é um depósito marcado como "desconsiderar",
+   então o saldo geral não o enxerga. A chave depositos do Worker traz esse saldo por fábrica.
+   Ele conta na cobertura (o material existe), mas no montável só vale para o que é produzido
+   naquela fábrica — por isso a ficha e a OP dizem onde o produto é montado. */
+const DEPOSITOS = [];   /* nomes como vêm do Tiny: "Fabrica - Doctor Hair"... */
+const fabRot = d => !d ? "" : d === "__geral" ? "em casa (Geral)" : String(d).replace(/^\s*f[aá]brica\s*-\s*/i, "").trim();
+/* disponível de um componente para quem monta em "fab": Geral + aquela fábrica, menos o reservado.
+   Sem local definido, vale o saldo de todos os lugares. */
+function dispEm(r, fab){
+  if (!r) return 0;
+  if (!fab || !r.fab) return r.disponivel;
+  const ext = fab === "__geral" ? 0 : (r.fab[fab] || 0);
+  return (r.saldo_geral != null ? r.saldo_geral : r.saldo) + ext - (r.reservado || 0);
+}
+const fabDaFicha = cod => (FICHAS[cod] && FICHAS[cod].fabrica) || "";
+function selFabrica(id, atual, rotuloVazio){
+  const ops = [["", rotuloVazio || "não definido — conta o saldo de todos os lugares"], ["__geral", "em casa (depósito Geral)"]]
+    .concat(DEPOSITOS.map(d => [d, fabRot(d)]));
+  if (atual && !ops.some(o => o[0] === atual)) ops.push([atual, fabRot(atual)]);
+  return '<select id="'+id+'" class="fabsel">'+ops.map(([v, t]) =>
+    '<option value="'+esc(v)+'"'+(v === (atual || "") ? ' selected' : '')+'>'+esc(t)+'</option>').join("")+'</select>';
+}
+function escopoDoTiny(p){
+  const m = /^(\d)\./.exec(String(p.categoria || "").trim()), d = m ? +m[1] : null;
+  const cl = String(p.classe_produto || "S").trim().toUpperCase() || "S";
+  if (cl === "M" || d === 0) return "insumo";
+  if (d !== null && d >= 1 && d <= 4) return "acabado";
+  return null;
+}
+function montarCatalogo(k){
+  migrarCodigos();
+  const antigos = {}; DATA.skus.forEach(x=>{ antigos[x.codigo] = x; });
+  const usados = new Set();
+  Object.keys(FICHAS).forEach(pai=>{ usados.add(pai); (FICHAS[pai].itens||[]).forEach(it => usados.add(it.c)); });
+  const novo = [];
+  (k.produtos || []).forEach(p=>{
+    if (!p.codigo || String(p.situacao || "A").trim().toUpperCase() !== "A") return;
+    let esc0 = escopoDoTiny(p);
+    if (!esc0 && usados.has(p.codigo)) esc0 = "insumo";
+    if (!esc0) return;
+    const cl = String(p.classe_produto || "S").trim().toUpperCase() || "S";
+    /* origem fiscal do Tiny: 1, 2, 6 e 7 são estrangeira; as demais, nacional */
+    const imp = ["1","2","6","7"].includes(String(p.origem ?? "").trim());
+    const cat = String(p.categoria || "").split(">>").map(x => x.trim());
+    let x = antigos[p.codigo];
+    if (!x) x = ins(p.codigo, p.nome || p.codigo, cat[0] || "", cat[1] || "", p.marca || "", cl,
+                    imp ? "1" : "0", imp ? "Importado" : "Nacional", 0, 0);
+    x.nome = p.nome || x.nome;
+    x.categoria = cat[0] || "Sem categoria no Tiny"; x.subcategoria = cat[1] || "";
+    x.marca = p.marca || "Sem marca no cadastro";
+    x.classe = cl;
+    x.classe_label = {S:"Simples", K:"Kit", V:"Produto pai", F:"Fabricado", M:"Matéria-prima"}[cl] || cl;
+    x.origem = imp ? "1" : "0"; x.origem_label = imp ? "Importado" : "Nacional";
+    x.seguranca = imp ? 63 : 21; x.leadtime = DATA.leadtime; x.alvo = x.leadtime + x.seguranca;
+    x.unidade = String(p.unidade || "").trim().toUpperCase() || "UN";
+    x.escopos = [esc0];
+    x.real = !(cl === "K" || cl === "V"); x.kit = cl === "K"; x.pai = cl === "V";
+    x.serie = {};
+    novo.push(x);
+  });
+  DATA.skus.length = 0; novo.forEach(x => DATA.skus.push(x));
+  Object.keys(PORCOD).forEach(c => delete PORCOD[c]);
+  DATA.skus.forEach(x => { PORCOD[x.codigo] = x; });
+  CATS.length = 0;   [...new Set(DATA.skus.map(x => x.categoria))].sort().forEach(c => CATS.push(c));
+  MARCAS.length = 0; [...new Set(DATA.skus.map(x => x.marca))].sort().forEach(c => MARCAS.push(c));
+  /* ficha (ou componente) com código que não existe mais como ativo no Tiny */
+  return [...usados].filter(c => !PORCOD[c]);
+}
+/* os 3 meses fechados antes do mês atual (em outubro: julho, agosto e setembro) */
+function mesesFechados(){
+  const out = []; let [a, m] = MES_HOJE.split("-").map(Number);
+  for (let i = 0; i < 3; i++){ if (--m < 1){ m = 12; a--; } out.unshift(a + "-" + String(m).padStart(2,"0")); }
+  return out;
+}
+const MESES_ROT = k => MESES[Number(k.slice(5,7)) - 1];
 function aplicarAoVivo(k, ocs){
   if (BASE) voltarPraBase();
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -5533,22 +5657,37 @@ function aplicarAoVivo(k, ocs){
   /* venda mensal por NF (chave vmes do Worker): refaz a serie do grafico e o "vendas no mes".
      Sem ela, a serie fica a gravada no arquivo — e o mes corrente para no dia da gravacao. */
   const vm = {}, temVm = Array.isArray(k.vmes) && k.vmes.length > 0;
-  (k.vmes||[]).forEach(r => { if (!r.sku || !r.mes) return; (vm[r.sku] || (vm[r.sku] = {}))[r.mes] = _toNum(r.qtd); });
+  (k.vmes||[]).forEach(r => { if (!r.sku || !r.mes) return; (vm[r.sku] || (vm[r.sku] = {}))[r.mes] = (vm[r.sku][r.mes] || 0) + _toNum(r.qtd); });
   const mesesVivos = [];
   if (temVm){ let [a, m] = BASE_INI.split("-").map(Number);
     while (true){ const key = a+"-"+String(m).padStart(2,"0"); if (key > MES_HOJE) break; mesesVivos.push(key); if (++m > 12){ m = 1; a++; } } }
 
-  /* componente de ficha que veio do cadastro do Tiny e não está no catálogo gravado: entra de novo */
   if (!ULTIMO_K) ULTIMO_K = k;
-  Object.keys(FICHAS).forEach(pai => (FICHAS[pai].itens || []).forEach(it => { if (!PORCOD[it.c]) garantirSku(it.c); }));
+  const sumidos = montarCatalogo(k);
+  /* venda do código antigo soma no novo */
+  Object.keys(vm).forEach(c=>{ const n = DEPARA[c]; if (!n) return;
+    const d = vm[n] || (vm[n] = {}); Object.entries(vm[c]).forEach(([m, q]) => { d[m] = (d[m] || 0) + q; }); delete vm[c]; });
+  const fech = mesesFechados();
+  /* abril/26 é o primeiro mês da base de NF e começa no dia 28: mês sem base inteira não entra no divisor */
+  const fechValidos = fech.filter(m => m > BASE_INI);
   const est = {}, prod = {}, v30 = {}, v3m = {};
+  const fabs = {};
+  (k.depositos || []).forEach(r=>{
+    const c = codNovo(String(r.codigo || "").trim()), d = String(r.deposito || "").trim();
+    if (!c || !d) return;
+    if (!DEPOSITOS.includes(d)) DEPOSITOS.push(d);
+    const m = fabs[c] || (fabs[c] = {}); m[d] = (m[d] || 0) + _toNum(r.saldo);
+  });
+  DEPOSITOS.sort();
   (k.produtos||[]).forEach(p => { if (p.codigo) prod[p.codigo] = p; });
   (k.estoque||[]).forEach(r => { if (r.codigo) est[r.codigo] = r; });
   /* aceita o nome de coluna das consultas de pedido (itens_codigo/qtd_30d) ou das de NF (sku/qtd) */
-  (k.v30||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v30[c] = (r.qtd_30d ?? r.qtd); });
+  (k.v30||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c){ const n = codNovo(c); v30[n] = (v30[n] || 0) + _toNum(r.qtd_30d ?? r.qtd); } });
   (k.v3m||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v3m[c] = (r.qtd_3m ?? r.qtd); });
 
   const cheg = {};
+  ocs.forEach(o=>{ if (o.sku) o.sku = codNovo(o.sku); });
+  (ocs.todas || []).forEach(l=>{ if (l.sku) l.sku = codNovo(l.sku); });
   ocs.filter(ocAberta).forEach(o=>{
     const a = cheg[o.sku];
     if (!a || o.data_prevista < a.d) cheg[o.sku] = {d:o.data_prevista, q:_toNum(o.quantidade), f:o.fornecedor};
@@ -5558,38 +5697,33 @@ function aplicarAoVivo(k, ocs){
   let atualizados = 0; const semKondado = [];
   CHEG_BASE = {};
   DATA.skus.forEach(s=>{
-    const e = est[s.codigo], p = prod[s.codigo];
-    if (!e && !p){ semKondado.push(s.codigo); s.saldo_vivo = false; }
-    else {
-      atualizados++;
-      if (p && p.nome) s.nome = p.nome;
-      if (e){ s.saldo = _toNum(e.saldo); s.reservado = _toNum(e.saldoreservado); }
-      s.saldo_vivo = !!e;
-      const q30 = _toNum(v30[s.codigo]), q3m = _toNum(v3m[s.codigo]), media = q3m / 3;
-      let dem = media, trocou = false, alta = false, queda = false;
-      if (media > 0){
-        if (q30 > 1.5 * media){ dem = q30; trocou = true; alta = true; }
-        else if (q30 <= 0.5 * media){ dem = q30; trocou = true; queda = true; }
-      }
-      s.q30 = q30; s.q90 = q3m; s.media_mes = media; s.venda_diaria = dem / 30;
-      s.trocou = s.usando_30d = trocou; s.gatilho_alta = alta; s.gatilho_queda = queda;
-      s.aceleracao = media > 0 ? q30 / media : (q30 === 0 ? null : Infinity);
-      s.sem_historico = s.aceleracao !== null && isFinite(s.aceleracao) && Math.abs(s.aceleracao - 3) < 0.005;
-      /* mês com ruptura não vale como queda: guarda a régua de 3 meses ao lado */
-      if (queda && media > 0){
-        const vd = media / 30, cob = s.saldo / vd;
-        const rup = maisDias(hojeIso, Math.round(Math.max(cob,0)));
-        s.alt3m = {media_mes: media, venda_diaria: vd, cobertura: cob, trocou: false, ruptura: rup,
-                   pedir_ate: maisDias(rup, -s.leadtime), risco: s.saldo < 0 || cob < s.alvo,
-                   sugestao: null, giro_baixo: cob > 365, sem_giro: false};
-      } else s.alt3m = null;
-    }
-    if (temVm){
-      const vivo = vm[s.codigo] || {}, ser = {};
-      Object.keys(s.serie || {}).forEach(m => { if (m < BASE_INI) ser[m] = s.serie[m]; });
-      mesesVivos.forEach(m => { ser[m] = vivo[m] || 0; });
-      s.serie = ser; s.mes_atual = ser[MES_HOJE] || 0;
-    }
+    const e = est[s.codigo];
+    atualizados++;
+    /* saldo só do Tiny: sem linha no Kondado, o produto fica sem leitura e fora da conta —
+       nunca com um número antigo */
+    s.fab = fabs[s.codigo] || {};
+    s.saldo_ext = Object.values(s.fab).reduce((a, v) => a + v, 0);
+    if (e){ s.saldo_geral = _toNum(e.saldo); s.reservado = _toNum(e.saldoreservado); s.sem_leitura = false; }
+    else { s.saldo_geral = 0; s.reservado = 0; s.sem_leitura = !s.saldo_ext; if (s.sem_leitura) semKondado.push(s.codigo); }
+    /* físico = em casa + nas fábricas */
+    s.saldo = s.saldo_geral + s.saldo_ext;
+    s.saldo_vivo = !!e || !!s.saldo_ext;
+    s.disponivel = s.saldo - s.reservado;
+    const vivo = vm[s.codigo] || {}, ser = {};
+    mesesVivos.forEach(m => { ser[m] = vivo[m] || 0; });
+    s.serie = ser; s.mes_atual = ser[MES_HOJE] || 0;
+    /* média = NF dos 3 meses fechados ÷ 3. O mês atual não entra. A conta usa sempre a média;
+       os 30 dias viram só o indicador de aceleração. */
+    const soma = fechValidos.reduce((a, m) => a + (ser[m] || 0), 0);
+    const media = fechValidos.length ? soma / fechValidos.length : 0;
+    const q30 = _toNum(v30[s.codigo]);
+    s.q30 = q30; s.q90 = soma; s.media_mes = media; s.venda_diaria = media / 30;
+    s.trocou = s.usando_30d = false;
+    s.gatilho_alta = media > 0 && q30 > 1.5 * media;
+    s.gatilho_queda = media > 0 && q30 <= 0.5 * media;
+    s.aceleracao = media > 0 ? q30 / media : (q30 === 0 ? null : Infinity);
+    s.sem_historico = false; s.alt3m = null;
+    s.meses_media = fechValidos.map(MESES_ROT).join(", ");
     const c = cheg[s.codigo];
     s.chegada_data = c ? c.d : null; s.chegada_qtd = c ? c.q : null; s.chegada_forn = c ? c.f : null;
     s.forn_atrasado = !!(c && c.d < hojeIso);
@@ -5600,7 +5734,8 @@ function aplicarAoVivo(k, ocs){
   BASE = null;               /* a nova linha de base é a leitura de agora */
   explodir();
   acompanharRupturas(hojeIso);
-  return {atualizados, semKondado};
+  document.documentElement.setAttribute("data-vivo", "1");
+  return {atualizados, semKondado, sumidos};
 }
 
 /* A ruptura detectada pelo saldo ganha data de início no primeiro dia em que aparece e, quando
@@ -5689,8 +5824,12 @@ function pintaFonte(res, ocs){
     "<b>Dado ao vivo.</b> Estoque, cadastro e venda (nota fiscal emitida) vêm do <b>Tiny via Kondado</b>; " +
     "os pedidos de compra vêm da aba <b>OC's</b> da planilha <b>" + esc(DRIVE_ITEM_PATH.split("/").pop()) + "</b> no SharePoint (AREA_BI) " +
     "e são editados na aba Pedidos. " +
-    res.atualizados + " itens atualizados · " + ocs.filter(ocAberta).length + " OCs em aberto" +
-    (res.semKondado.length ? " · " + res.semKondado.length + " itens da torre não vieram do Kondado e ficaram com a leitura anterior" : "") + "." +
+    res.atualizados + " produtos ativos do Tiny · " + ocs.filter(ocAberta).length + " OCs em aberto" +
+    " · média = NF de " + mesesFechados().map(MESES_ROT).join(", ") + " (meses fechados)" +
+    (res.semKondado.length ? " · <b>" + res.semKondado.length + " sem saldo no Kondado</b> (ficam fora da conta): " +
+      res.semKondado.slice(0, 12).map(esc).join(", ") + (res.semKondado.length > 12 ? "…" : "") : "") +
+    ((res.sumidos || []).length ? " · <b>" + res.sumidos.length + " código(s) de ficha que não existem mais ativos no Tiny</b>: " +
+      res.sumidos.map(esc).join(", ") : "") + "." +
     (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
       return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
         ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
