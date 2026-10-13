@@ -384,6 +384,8 @@ tbody td:first-child{box-shadow:inset 4px 0 0 var(--tone)}
 .gm{position:absolute;bottom:-15px;font-size:9.4px;color:var(--muted);white-space:nowrap}
 .gano{font-style:normal;font-size:8.4px;opacity:.72;margin-left:1px}
 .gref{position:absolute;left:0;right:0;border-top:1.5px dashed var(--accent-text);z-index:2}
+.gleg .sw-ref{display:inline-block;width:16px;height:0;border-top:1.5px dashed var(--accent-text);vertical-align:middle;margin-right:5px;background:none!important}
+.gleg-ref{color:var(--accent-text)}
 .gref i{position:absolute;right:0;top:-13px;font-size:9px;font-style:normal;color:var(--accent-text);
   background:var(--surface);padding:0 3px}
 .gleg{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px;font-size:9.6px;color:var(--muted)}
@@ -1467,6 +1469,8 @@ function leadEditado(cod){ const r = temReg(cod); return !!(r && r.leadtime); }
 const maisDias = (iso, n) =>
   new Date(new Date(iso+"T00:00:00").getTime() + n*86400000).toISOString().slice(0,10);
 
+/* o que a sugestão desconta: todas as OCs e ordens em aberto do SKU, não só a próxima */
+function aCaminho(s){ return s.chegada_total != null ? s.chegada_total : (s.chegada_qtd || 0); }
 function comLead(s, lt){
   const alvo = lt + s.seguranca;
   const o = {alvo: alvo, leadtime: lt};
@@ -1479,7 +1483,7 @@ function comLead(s, lt){
   else if (s.chegada_data < DATA.gerado_em) o.risco = true;
   else                                  o.risco = s.chegada_data > s.ruptura;
   o.sugestao = (s.venda_diaria > 0 && (o.risco || s.cobertura < alvo))
-    ? Math.max(0, Math.round(s.venda_diaria * alvo - s.saldo - (s.chegada_qtd || 0)))   /* alvo = leadtime + segurança */
+    ? Math.max(0, Math.round(s.venda_diaria * alvo - s.saldo - aCaminho(s)))   /* alvo = leadtime + segurança */
     : null;
   return o;
 }
@@ -1779,8 +1783,9 @@ function statusDb(st, msg){
 }
 /* registros por SKU (resposta, rupturas, notas, leadtime): sobe o que mudou desde a última vez */
 let REG_SYNC = {};
+let REG_PRONTO = false;   /* os registros do banco já chegaram? antes disso, nada sobe */
 function sincronizarReg(){
-  if (!DB) return;
+  if (!DB || !REG_PRONTO) return;
   Object.keys(REG).forEach(cod=>{
     const j = JSON.stringify(REG[cod]);
     if (REG_SYNC[cod] === j) return;
@@ -1863,6 +1868,9 @@ async function ligarDb(){
     Object.keys(REG).forEach(k=> delete REG[k]);
     Object.assign(REG, vindo);
     REG_SYNC = {}; Object.keys(REG).forEach(k=>{ REG_SYNC[k] = JSON.stringify(REG[k]); });
+    REG_PRONTO = true;
+    migrarCodigos();
+    if (AO_VIVO) acompanharRupturas(HOJE_ISO);
     try { localStorage.setItem("torre_reg", JSON.stringify(REG)); } catch(e){}
     explodir(); render();
   }, ()=>{});
@@ -1871,6 +1879,7 @@ async function ligarDb(){
     qs.docs.forEach(d=>{ const b = d.data(); if (!b) return; vindo[b.id || d.id] = b; });
     Object.keys(ORDENS).forEach(k=> delete ORDENS[k]);
     Object.assign(ORDENS, vindo);
+    migrarCodigos();
     salvarOrdens(); explodir(); render();
   }, ()=>{});
 
@@ -1892,16 +1901,34 @@ async function ligarDb(){
     qs.docs.forEach(d=>{
       const b = d.data(); if (!b) return;
       const cod = b.sku || d.id;
-      vindo[cod] = {itens: Array.isArray(b.itens) ? b.itens : [], estado: b.estado || "rascunho",
-                    por: b.por, em: b.em, revisar: !!b.revisar, conferida: b.conferida || null, origem: b.origem || null};
+      const f = Object.assign({}, b); delete f.sku;
+      vindo[cod] = Object.assign(f, {itens: Array.isArray(b.itens) ? b.itens : [], estado: b.estado || "rascunho",
+                    revisar: !!b.revisar, conferida: b.conferida || null, origem: b.origem || null});
     });
     Object.keys(FICHAS).forEach(k=> delete FICHAS[k]);
     Object.assign(FICHAS, vindo);
+    migrarCodigos();
     salvarFichas(); explodir(); render();
   }, ()=>{});
 }
 function fichaDe(cod){ return FICHAS[cod]; }
-function ehMontado(s){ return !!(s.kit || s.classe === "F"); }
+/* Regra única: FABRICADO é quem tem ficha homologada (completa, com componente que não seja ele
+   mesmo, e não é kit K). Fabricado: pedido é OP, cobertura soma o montável, a falta vira demanda
+   dos componentes. Sem ficha homologada: COMPRADO — pedido é OC do próprio produto. Homologar ou
+   tirar a ficha muda isso na torre inteira (listas, sugestão, pedidos e matéria-prima). */
+function ehFabricado(cod){
+  if (!fichaConta(cod)) return false;
+  return !(FICHAS[cod].itens || []).some(it => it.c === cod);
+}
+function tipoProduto(s){
+  if (s.classe === "K") return "Kit (sai pelos componentes)";
+  if (s.classe === "V") return "Produto pai";
+  if (ehFabricado(s.codigo)) return "Fabricado · ficha homologada";
+  if (FICHAS[s.codigo] && (FICHAS[s.codigo].itens||[]).length) return "Comprado · ficha em rascunho";
+  if (s.classe === "M" || ((s.escopos||[]).length === 1 && s.escopos[0] === "insumo")) return "Matéria-prima";
+  return "Comprado";
+}
+function ehMontado(s){ return ehFabricado(s.codigo); }
 function montados(){ return DATA.skus.filter(ehMontado); }
 
 /* --- as travas do editor --- */
@@ -1965,7 +1992,7 @@ function recalcular(s){
       s.risco = (s.cobertura < s.alvo) &&
                 (!s.chegada_data || s.chegada_data < DATA.gerado_em || s.chegada_data > s.ruptura);
     s.sugestao = (s.risco || s.cobertura < s.alvo)
-      ? Math.max(0, Math.round(s.venda_diaria * s.alvo - base - (s.chegada_qtd || 0)))
+      ? Math.max(0, Math.round(s.venda_diaria * s.alvo - base - aCaminho(s)))
       : null;
   }
 }
@@ -2008,7 +2035,7 @@ let CHEG_BASE = null;
 function guardarChegada(){
   CHEG_BASE = {};
   DATA.skus.forEach(s=>{ CHEG_BASE[s.codigo] = {d:s.chegada_data, q:s.chegada_qtd, f:s.chegada_forn,
-                                                res:s.reservado || 0}; });
+                                                t:s.chegada_total, res:s.reservado || 0}; });
 }
 /* Ordem de producao em aberto SEGURA componente: o que ela vai consumir sai do
    disponivel dos outros. E o que faz dois kits pararem de prometer a mesma unidade.
@@ -2050,16 +2077,18 @@ function aplicarOrdens(){
   const resOP = reservaDeOP();
   DATA.skus.forEach(s=>{
     let a = porSku[s.codigo]; const b = CHEG_BASE[s.codigo] || {};
+    /* tudo o que está a caminho (torre + planilha), não só a próxima chegada: é o que a sugestão desconta */
+    const totA = a ? a.q : 0, totB = (AO_VIVO && b.d) ? (b.t != null ? b.t : (b.q || 0)) : 0;
     /* com dado ao vivo, a ordem da torre SOMA com as OCs da planilha em vez de esconde-las:
        vale a proxima chegada (a data mais cedo); na mesma data, as quantidades somam */
     if (a && AO_VIVO && b.d && b.q){
       if (String(b.d) < String(a.d)) a = {d:b.d, q:b.q, f:b.f};
       else if (String(b.d) === String(a.d)) a = {d:a.d, q:a.q + b.q, f:a.f};
     }
-    if (!a && AO_VIVO && b.d){ s.chegada_data = b.d; s.chegada_qtd = b.q; s.chegada_forn = b.f; s.cheg_real = true; }
-    else if (a){ s.chegada_data = a.d; s.chegada_qtd = a.q; s.chegada_forn = a.f; s.cheg_real = true; }
-    else if (IGNORA_SIM){ s.chegada_data = null; s.chegada_qtd = null; s.chegada_forn = null; s.cheg_real = false; }
-    else { s.chegada_data = b.d; s.chegada_qtd = b.q; s.chegada_forn = b.f; s.cheg_real = false; }
+    if (!a && AO_VIVO && b.d){ s.chegada_data = b.d; s.chegada_qtd = b.q; s.chegada_forn = b.f; s.cheg_real = true; s.chegada_total = totB; }
+    else if (a){ s.chegada_data = a.d; s.chegada_qtd = a.q; s.chegada_forn = a.f; s.cheg_real = true; s.chegada_total = totA + totB; }
+    else if (IGNORA_SIM){ s.chegada_data = null; s.chegada_qtd = null; s.chegada_forn = null; s.cheg_real = false; s.chegada_total = null; }
+    else { s.chegada_data = b.d; s.chegada_qtd = b.q; s.chegada_forn = b.f; s.cheg_real = false; s.chegada_total = b.q; }
     /* duas reservas diferentes, guardadas separadas: a do Tiny e a das OPs */
     s.reservado_tiny = b.res || 0;
     s.reservado_op = resOP[s.codigo] || 0;
@@ -2158,6 +2187,7 @@ function explodir(){
       if (p0) s.aceleracao = p0.aceleracao;
     }
     s.sem_historico = false; s.trocou = false;
+    s.trocou_pais = paisDe[cod].filter(u => PORCOD[u.pai] && PORCOD[u.pai].trocou).map(u => u.pai);
     recalcular(s);
   });
 
@@ -2626,15 +2656,17 @@ function explicacao(s){
   }
   if (s0_em_ruptura_flag) L.push("Em ruptura agora: o saldo físico está em "+nf(s.saldo)+
     ". A ferramenta abriu o registro sozinha e fecha quando o saldo voltar a ser positivo.");
-  if (s._alt) L.push("Há ruptura no período, então a régua voltou para a média de 3 meses — o mês sem produto não vale como queda de demanda.");
+  if (s.troca_desfeita) L.push("Os últimos 30 dias caíram a metade da média, mas houve ruptura recente — a queda é falta de produto, não de demanda. A régua fica na média de 3 meses.");
   L.push("Demanda considerada: " + (
       (s.vd_explodida||0) > 0 ? "venda avulsa ("+fx(s.vd_propria||0)+"/dia) + consumo nas fichas homologadas ("+fx(s.vd_explodida)+"/dia)"
+    : s.trocou ? "os últimos 30 dias ("+nf(s.q30)+" un.), porque "+(s.gatilho_alta ? "passaram de 1,5×" : "ficaram em metade ou menos d")+
+        "a média de "+(s.meses_media || "3 meses fechados")+" ("+nf(s.media_mes)+" un./mês) — régua trocada para o patamar novo"
     : "a média de "+(s.meses_media || "3 meses fechados")+" ("+nf(s.media_mes)+" un./mês)") + " → " + s.venda_diaria.toFixed(1) + " un. por dia." +
-    (s.gatilho_alta ? " Alerta: os últimos 30 dias ("+nf(s.q30)+" un.) passaram de 1,5× a média — a conta segue pela média."
-     : s.gatilho_queda ? " Alerta: os últimos 30 dias ("+nf(s.q30)+" un.) ficaram em metade ou menos da média — a conta segue pela média." : ""));
+    ((s.trocou_pais||[]).length ? " Parte dessa demanda vem de produto com régua trocada ("+s.trocou_pais.map(esc).join(", ")+"): o patamar novo dele já entra aqui." : ""));
 
   L.push("Cobertura: "+nf(s.cobertura)+" dias de estoque físico"+(s.montavel ? " + montável" : "")+" no ritmo atual (alvo "+s.alvo+" dias, "+s.origem_label.toLowerCase()+").");
-  L.push(s.chegada_data ? "Próxima chegada: "+dbr(s.chegada_data)+" · "+nf(s.chegada_qtd)+" un. de "+s.chegada_forn+"."
+  L.push(s.chegada_data ? "Próxima chegada: "+dbr(s.chegada_data)+" · "+nf(s.chegada_qtd)+" un. de "+s.chegada_forn+"."+
+      (aCaminho(s) > (s.chegada_qtd||0) ? " No total há "+nf(aCaminho(s))+" un. em aberto, e a sugestão desconta tudo." : "")
                         : "Não há pedido de compra em aberto para este SKU.");
   if (s.giro_baixo){
     L.push("Giro baixo: a cobertura passa de 12 meses. Fica fora da régua de risco — não adianta comprar, adianta olhar se o produto ainda faz sentido.");
@@ -2746,9 +2778,10 @@ function grafico(s){
   const cols = janela12();
   const rupM = mesesRuptura(s);
   const vals = cols.map(c => s.serie[c.key] ?? null);
-  const max = Math.max(1, ...vals.filter(v => v !== null), s.media_mes);
+  const refV = (s.trocou && !((s.vd_explodida||0) > 0)) ? s.venda_diaria * 30 : s.media_mes;
+  const max = Math.max(1, ...vals.filter(v => v !== null), refV);
   const alt = v => Math.max(2, Math.round((v / max) * 88));
-  const refY = Math.round((s.media_mes / max) * 88);
+  const refY = Math.round((refV / max) * 88);
   /* cor por ano: o ano corrente é o tom cheio, os anteriores vão desbotando.
      Hoje só existe 2026 na base; a régua já fica pronta para quando houver 2025. */
   const anoAtual = cols[cols.length-1].ano;
@@ -2777,9 +2810,9 @@ function grafico(s){
   const legAnos = anosNaBase.map(a =>
     '<span><i style="background:'+corAno(a)+'"></i><b>'+a+'</b></span>').join("");
   return '<div class="graf">'+
-    '<div class="gplot"><span class="gref" style="bottom:'+refY+'%"><i>'+(modoGrafico(s) !== "venda" ? 'demanda/mês' : 'média 3m')+' · '+nf(s.media_mes)+'</i></span>'+
+    '<div class="gplot"><span class="gref" style="bottom:'+refY+'%"></span>'+
     barras+'</div>'+
-    '<div class="gleg">'+legAnos+
+    '<div class="gleg"><span class="gleg-ref"><i class="sw-ref"></i>'+(modoGrafico(s) !== "venda" ? 'demanda/mês' : s.trocou ? 'demanda usada (últimos 30 d, régua trocada)' : 'média 3m')+' · <b>'+nf(refV)+'</b></span>'+legAnos+
     '<span><i style="background:repeating-linear-gradient(135deg,var(--ano-0) 0 3px,var(--surface) 3px 6px)"></i>mês incompleto</span>'+
     '<span><i class="sw-sem"></i>sem base no Kondado</span>'+
     (Object.keys(rupM).length ? '<span><i class="sw-rup"></i>mês com ruptura</span>' : '')+
@@ -2956,7 +2989,8 @@ function abrirSku(s0){
   document.getElementById("d-nome").textContent = titulo(s.nome);
   document.getElementById("d-sub").innerHTML = '<i class="dot" style="display:inline-block;background:'+TOM[est]+
     ';margin-right:6px"></i><span class="mono">'+esc(s.codigo||"(sem código)")+"</span> · "+
-    esc(titulo(s.marca))+" · "+esc(s.subcategoria.replace(/^[\d.]+\s*/,""))+" · "+esc(s.origem_label)+" · "+esc(s.classe_label);
+    esc(titulo(s.marca))+" · "+esc(s.subcategoria.replace(/^[\d.]+\s*/,""))+" · "+esc(s.origem_label)+" · <b>"+esc(tipoProduto(s))+"</b>"+
+    (s.cat_fora ? ' · <span class="c-amber">categoria fora do padrão no Tiny</span>' : '');
   const ocs = DATA.ocs.filter(o=>o.sku===s.codigo);
   const lead = leadDe(s0.codigo), temLead = leadEditado(s0.codigo);
   const regLead = temReg(s0.codigo) || {};
@@ -2979,15 +3013,16 @@ function abrirSku(s0){
         '<div class="ds">'+(NF_ATE && NF_ATE.slice(0,7) === MES_HOJE
           ? 'NF de 01 a '+dbr(NF_ATE).slice(0,5)+' · ritmo p/ ~'+nf(projMes)+' no mês'
           : 'NF emitidas no mês · o Worker não informou até que dia a base vai')+'</div></div>'+
-      '<div class="dcell"><div class="k">'+((s.vd_explodida||0) > 0 ? 'Demanda mensal' : 'Média mensal')+'</div>'+
-        '<div class="v num">'+nf(s.media_mes)+'</div>'+
+      '<div class="dcell"><div class="k">'+((s.vd_explodida||0) > 0 || s.trocou ? 'Demanda mensal' : 'Média mensal')+'</div>'+
+        '<div class="v num">'+nf(s.trocou && !((s.vd_explodida||0) > 0) ? s.venda_diaria * 30 : s.media_mes)+'</div>'+
         '<div class="ds">'+((s.vd_explodida||0) > 0 ? 'venda avulsa + consumo nas fichas homologadas'
+          : s.trocou ? 'últimos 30 dias · régua trocada (média 3m: '+nf(s.media_mes)+')'
           : 'média de '+esc(s0.meses_media || 'jul, ago, set')+' (meses fechados)')+'</div></div>'+
       '<div class="dcell"><div class="k">Aceleração</div><div class="v num acc">'+icon(ritmo(s),15)+
         (s.aceleracao===null?"–":fx(s.aceleracao)+"x")+
         (s.trocou?'<span class="trg">'+icon("regua-trocada",12)+'</span>':'')+'</div>'+
         '<div class="ds">30 d vs. média mensal</div></div>'+
-      '<div class="dcell"><div class="k">Cobertura</div><div class="v num">'+(s.cobertura===null?"–":nf(s.cobertura)+" d")+'</div>'+
+      '<div class="dcell"><div class="k">Cobertura</div><div class="v num">'+(s.cobertura===null?"–":nf(Math.max(0, s.cobertura))+" d")+'</div>'+
         '<div class="ds">alvo <b>'+s.alvo+' d</b> <span class="alvoquebra">= '+(s.lead_derivado ? s.leadtime : lead)+' leadtime + '+s0.seguranca+
         ' segurança</span></div></div>'+
       (s.lead_derivado
@@ -3002,7 +3037,8 @@ function abrirSku(s0){
               : 'padrão da torre')+'</div></div>')+
       '<div class="dcell"><div class="k">Próxima chegada</div><div class="v num">'+
         (s.chegada_data ? dbr(s.chegada_data).slice(0,5) : '<span class="dim">–</span>')+'</div>'+
-        '<div class="ds">'+(s.chegada_data ? nf(s.chegada_qtd)+' un.'+(diasAte(s.chegada_data)<0?' · vencida':'') : 'sem pedido em aberto')+'</div></div>'+
+        '<div class="ds">'+(s.chegada_data ? nf(s.chegada_qtd)+' un.'+(diasAte(s.chegada_data)<0?' · vencida':'')+
+          (aCaminho(s) > (s.chegada_qtd||0) ? ' · <b>'+nf(aCaminho(s))+'</b> no total em aberto' : '') : 'sem pedido em aberto')+'</div></div>'+
       (s.montavel!==undefined
         ? '<div class="dcell" style="border-color:var(--azul);background:var(--accent-soft)">'+
             '<div class="k">Montável agora</div>'+
@@ -3156,12 +3192,14 @@ function abrirSku(s0){
 const REGRAS = [
  ["Catálogo vem do Tiny", "A lista de produtos é lida do cadastro do Tiny a cada Atualizar, só produto ativo. Categoria 1 a 4 = produto acabado; categoria 0 ou classe M = matéria-prima. Item que aparece numa ficha técnica entra como matéria-prima mesmo que o cadastro não diga. Nenhuma contagem fixa: o número de SKUs é o que o Tiny tiver naquele dia.", "aprovado 01/10"],
  ["Kit e produto pai ficam fora da conta", "Classe K (kit) e V (produto pai) aparecem na tela, mas não entram na cobertura nem na sugestão: o estoque deles é o dos componentes.", "aprovado 24/09"],
- ["De-para de códigos", "Os códigos que o Tiny trocou valem pelo novo: espuma → PA0001, finalizador → PA0002, primer → PA0003, sérum → PA0004, descolorante → PA0006. Ficha, registro e OC antigos com o código velho são lidos já convertidos.", "aprovado 01/10"],
+ ["Código que vai e volta no Tiny", "O Tiny já trocou espuma, finalizador, primer, sérum, removedor, descolorante e kit barba castanho claro 50g para PA0001–PA0007 e depois voltou para o código antigo. A torre não fixa direção: vale o código que está ativo no cadastro hoje, e o outro soma nele — venda, saldo, OC, ficha, registro e ordem. Na troca, fica a ficha homologada.", "aprovado 13/10"],
+ ["Categoria fora do padrão não some", "Produto ativo (classe S ou F) cuja categoria no Tiny perdeu o número 1. a 4. — caso da Cola Speed SM Lash — entra como acabado e aparece no aviso do topo para ser corrigido lá. Marketing, brinde, amostra e insumo continuam fora.", "aprovado 13/10"],
  ["Sem leitura = fora da conta", "Produto sem linha de saldo no Kondado fica marcado “sem leitura” e sai da cobertura, da ruptura e da sugestão. Nada de valor antigo ou gravado na página: os números da maquete e a foto de 14/09 saíram.", "aprovado 01/10"],
  ["Origem", "Vem do cadastro fiscal do Tiny: nacional = alvo 84 dias; importado (direto ou de terceiro) = 126 dias.", "aprovado 24/09"],
  ["De onde vem a venda", "Itens de nota fiscal emitida, com as mesmas regras do VENDECir: natureza na lista fechada de venda e situação Emitida DANFE ou Autorizada. Fora: devolução, bonificação, amostra, remessa e compra de fornecedor.", "aprovado 14/09"],
- ["Média dos 3 meses fechados", "Venda diária = NF dos 3 meses fechados ÷ 3 ÷ 30. Em outubro: julho, agosto e setembro. O mês atual não entra, e abril/26 (início da base) também não.", "aprovado 01/10"],
- ["30 dias é só alerta", "A conta usa sempre a média. Os últimos 30 dias viram o indicador de aceleração: acelerando ≥ 1,15× · estável entre 0,85× e 1,15× · desacelerando ≤ 0,85×. Passar de 1,5× ou cair a 0,5× da média acende o alerta, mas não troca a régua.", "aprovado 01/10"],
+ ["Média dos 3 meses fechados", "Venda diária = NF dos 3 meses fechados ÷ 3 ÷ 30. Em outubro: julho, agosto e setembro. O mês atual não entra, e abril/26 (início da base) também não. É a base; a troca de régua (abaixo) pode substituí-la pelos últimos 30 dias.", "aprovado 01/10"],
+ ["Troca de régua", "Quando os últimos 30 dias passam de 1,5× a média dos 3 meses fechados, ou caem a metade dela, a demanda passa a ser a dos 30 dias (patamar novo). Vale para tudo: a matéria-prima acompanha sozinha, porque a demanda dela é explodida da dos produtos que a usam. Ritmo: acelerando ≥ 1,15× · estável entre 0,85× e 1,15× · desacelerando ≤ 0,85×.", "aprovado 13/10"],
+ ["Ruptura desfaz a queda", "Se o SKU teve ruptura nos últimos 30 dias, a queda não troca a régua: faltou produto, não demanda. A régua fica na média de 3 meses. Vale só para a queda, não para a alta.", "aprovado 13/10"],
  ["Demanda de componente é explodida", "Insumo não é vendido: a venda diária dele é a soma dos pais que o consomem (venda diária do pai × quantidade na ficha), mais a venda avulsa quando ele também é vendido sozinho — caso do regenerador, do fixing gel e do oxidante.", "aprovado 24/09"],
  ["Explode F, não explode K", "Kit classe K sai em nota pelos componentes, então a demanda deles já está na base. Kit classe F sai como ele mesmo, então a demanda dos componentes só existe se a torre explodir.", "aprovado 24/09"],
  ["Estoque nas fábricas conta", "O saldo dos depósitos das fábricas terceiras (Doctor Hair, Cosmolife, DBE, Chams), que o Tiny marca como “desconsiderar”, soma no saldo físico e conta na cobertura. A tela mostra separado: “X em casa · Y na fábrica”.", "aprovado 01/10"],
@@ -3179,12 +3217,12 @@ const REGRAS = [
  ["Giro baixo", "Cobertura acima de 365 dias. Sai da régua de risco.", "aprovado 13/09"],
  ["Sem giro", "Nenhuma venda nos 3 meses fechados. Sem cobertura calculável, fica fora da régua.", "aprovado 24/09"],
  ["Ruptura de insumo não é ruptura de venda", "Quando um componente zera, para a montagem. Na aba de matéria-prima a coluna é “para de montar em”, e a gaveta lista quais produtos param.", "aprovado 24/09"],
- ["Sugestão de compra", "venda diária × alvo − saldo − o que vem a caminho, com alvo = leadtime + segurança (importado 63 + 63 = 126 dias; nacional 63 + 21 = 84). Em produto com ficha, o saldo inclui o montável. Ex.: Cola Only 3g caiu de ~12.500 para ~7.700. Sem múltiplo de caixa nem pedido mínimo, que não existem no cadastro.", "aprovado 01/10"],
+ ["Sugestão de compra", "venda diária × alvo − saldo − tudo o que está a caminho, com alvo = leadtime + segurança (importado 63 + 63 = 126 dias; nacional 63 + 21 = 84). Desconta todas as OCs e ordens em aberto do SKU, não só a próxima. Em produto fabricado, o saldo inclui o montável. Ex.: Cola Only 3g, 99,6 un./dia × 126 = 12.548 (a fórmula antiga dava 18.822). Sem múltiplo de caixa nem pedido mínimo, que não existem no cadastro.", "aprovado 13/10"],
  ["Leadtime por SKU", "Padrão 63 dias. Suprimentos pode preencher por SKU na gaveta; o valor vale para alvo, pedir até e sugestão, e fica salvo na aba “Cão” da planilha, para todos. O cartão diz “padrão da torre” ou “preenchido por fulano em data” — sem selo de “leadtime próprio”.", "aprovado 01/10"],
  ["Leadtime de produto com ficha é derivado", "Leadtime = maior leadtime entre os componentes + dias de montagem. A data de pedir até do kit passa a ser a do componente que vence primeiro.", "aprovado 24/09"],
  ["Estoque de segurança fixo por origem", "O colchão é 63 dias no importado e 21 no nacional, igual para todo SKU da mesma origem. Falta decidir se passa a ser calculado por SKU (variação da demanda e atraso do fornecedor).", "decidir"],
  ["Nível de serviço", "Não existe número definido. Perguntas abertas: um só para a empresa ou por curva ABC/linha/SKU? Quem pode mudar? Editável na torre ou no cadastro? Que frequência de ruptura é aceitável para um produto A?", "decidir"],
- ["Só ficha homologada entra na conta", "Ficha em rascunho aparece, mas não gera montável, leadtime derivado nem demanda de insumo. Ficha com o próprio produto como componente não conta.", "aprovado 24/09"],
+ ["Fabricado = ficha homologada", "Regra única para a torre inteira. Fabricado é quem tem ficha homologada: o pedido é OP, a cobertura soma o montável, a falta vira demanda dos componentes e o leadtime é o do componente mais lento + montagem. Sem ficha homologada é comprado: o pedido é OC do próprio produto. Ficha em rascunho aparece, mas não gera número nenhum e trava a OP. Homologar ou tirar a ficha muda tudo de uma vez. Na seleção, fabricado não entra em OC.", "aprovado 13/10"],
  ["Quantidade com decimal e unidade", "O componente aceita quantidade fracionada e unidade (un, ml, g…), para insumo usado por volume, como o RW acerola.", "aprovado 01/10"],
  ["Dias de montagem e local", "Cada ficha guarda os dias de montagem (padrão 2) e onde o produto é montado. A OP herda os dois e mostra a fábrica na lista.", "aprovado 01/10"],
  ["OP reserva componente", "A OP em aberto segura o que vai consumir, e o componente sai do disponível dos outros produtos. O que sai do montável de um entra como chegada do outro.", "aprovado 24/09"],
@@ -3192,11 +3230,12 @@ const REGRAS = [
  ["OP exige ficha homologada", "Com a ficha em rascunho, o botão de registrar fica travado, com caminho para a fila de homologação.", "aprovado 24/09"],
  ["Consumo de componente é degrau", "A torre trata a demanda de insumo como fluxo diário, mas a OP consome tudo de uma vez. A data de ruptura de componente é aproximada.", "decidir"],
  ["OC é editada no Cão e gravada na planilha", "Criar, editar datas (ETA, ETD, entrega), status, quantidades, NF e observações é feito no Cão e gravado direto na aba OC’s (Tabela1) do SharePoint. Antes de gravar, a torre confere se a linha mudou desde a leitura; se mudou, avisa e não passa por cima.", "aprovado 01/10"],
+ ["OC sem SKU liga pelo nome", "Quando o PROCX da planilha não acha a descrição na aba Produtos (SKU 0), a torre liga a OC pelo nome exato do produto no Tiny — foi o caso da OC 240, Cola Led 3g. O aviso do topo lista o que foi ligado assim e o que continua sem SKU.", "aprovado 13/10"],
  ["Tudo salvo para todos", "Fichas, marcadores, ordens de produção e registros de cada SKU (motivo de ruptura, notas, leadtime) moram na aba “Cão” da planilha de BI. Quem salva, salva para todo mundo; quem abre, vê o que está lá. Nada fica só no navegador.", "aprovado 01/10"],
  ["Dado ao vivo", "Com o login da Microsoft, o Atualizar lê do Kondado (pelo Worker) cadastro, saldo, saldo das fábricas e venda por NF, e as OCs da planilha. Bloco ausente nunca vira zero: nada é atualizado e a tela diz qual faltou.", "aprovado · no ar"],
- ["Lançar OC a partir da seleção", "Marca os SKUs e a OC nasce com todos eles, cada um com a sugestão da torre e o último fornecedor.", "aprovado 24/09"],
+ ["Lançar OC a partir da seleção", "Marca os SKUs e a OC nasce com os comprados, cada um com a sugestão da torre e o último fornecedor. Os fabricados da seleção ficam de fora, com aviso: o pedido deles é OP.", "aprovado 24/09"],
  ["Fornecedor vem da nota de entrada", "O emitente da NF de entrada (CFOP de compra e industrialização) é o fornecedor, com o último preço pago.", "aprovado 24/09"],
- ["Ao receber, a torre não soma estoque", "Quem mexe no saldo é o Tiny. Ao receber, a OC para de contar como chegada e a torre espera a próxima leitura.", "aprovado 24/09"],
+ ["Receber não mexe no estoque do Tiny", "O botão Receber da OC grava na aba OC’s a NF, a quantidade da NF, a data de entrega e o status Entregue (ou parcial); a OC para de contar como chegada. O Executar da OP marca quanto foi montado e libera a reserva dos componentes. Nenhum dos dois mexe no saldo: quem mexe é o Tiny, e a torre lê na próxima atualização.", "aprovado 13/10"],
  ["Cancelar é diferente de excluir", "Cancelar guarda no histórico e para de contar na cobertura. Excluir apaga de vez, só para engano de digitação.", "aprovado 24/09"],
  ["Valor não entra em OC nem OP", "Preço, custo, frete e condição de pagamento ficam fora até o cadastro de custo ser acertado.", "por desenvolver"],
  ["Sugerir recebimento pela NF de entrada", "Casar NF de entrada com OC em aberto por SKU, quantidade e data — nunca por nome, porque importado chega pela Hold Beauty Importação.", "por desenvolver"],
@@ -3219,11 +3258,13 @@ const SITUACOES = [
  {g:"Marcadores independentes — aparecem junto com a situação", itens:[
   {ic:"atraso", cor:"var(--amber)", n:"Fornecedor atrasado", f:s=>s.forn_atrasado,
    d:"Pedido de compra com previsão vencida e ainda em aberto. Convive com qualquer situação."},
+  {ic:"regua-trocada", cor:"var(--accent-text)", n:"Régua trocada", f:s=>s.trocou,
+   d:"A demanda deste SKU vem dos últimos 30 dias, não da média de 3 meses — porque passou de 1,5× a média ou caiu a metade dela. Ruptura recente desfaz a queda."},
   {ic:"ajustes", cor:"var(--accent-text)", n:"Leadtime preenchido", f:s=>leadEditado(s.codigo),
    d:"Suprimentos preencheu o leadtime deste produto no lugar dos 63 dias do padrão — a gaveta diz quem e quando. O alvo, a data de pedir até e a sugestão deste SKU saem desse número."}]},
  {g:"Ritmo de venda — o ícone da coluna Aceleração", itens:[
   {ic:"acelerando-forte", cor:"var(--text)", n:"Acelerando forte", f:s=>s.gatilho_alta && !s.sem_historico,
-   d:"Últimos 30 dias acima de 1,5× a média dos 3 meses fechados. É só alerta: a conta continua pela média."},
+   d:"Últimos 30 dias acima de 1,5× a média dos 3 meses fechados. Troca a régua: a demanda passa a ser a dos 30 dias."},
   {ic:"acelerando", cor:"var(--text)", n:"Acelerando", f:s=>!s.gatilho_alta && s.aceleracao!==null && s.aceleracao>=1.15,
    d:"Entre 1,15× e 1,5× a média."},
   {ic:"estavel", cor:"var(--text)", n:"Estável", f:s=>s.aceleracao!==null && s.aceleracao>0.85 && s.aceleracao<1.15,
@@ -3231,7 +3272,7 @@ const SITUACOES = [
   {ic:"desacelerando", cor:"var(--text)", n:"Desacelerando", f:s=>s.aceleracao!==null && s.aceleracao<=0.85 && !s.gatilho_queda,
    d:"Abaixo de 0,85× a média."},
   {ic:"desacelerando-forte", cor:"var(--text)", n:"Desacelerando forte", f:s=>s.gatilho_queda,
-   d:"Últimos 30 dias em metade ou menos da média. É só alerta: a conta continua pela média."},
+   d:"Últimos 30 dias em metade ou menos da média. Troca a régua para os 30 dias — menos quando houve ruptura recente."},
   {ic:"sem-giro-col", cor:"var(--text)", n:"Sem giro", f:s=>s.sem_giro,
    d:"Sem venda nenhuma nos 3 meses fechados."}]}
 ];
@@ -3340,7 +3381,8 @@ function pintaMini(){
   if (!MINI || !s0){ if (btn) btn.setAttribute("aria-expanded","false"); return; }
   if (btn) btn.setAttribute("aria-expanded","true");
 
-  const producao = !!(FICHAS[s0.codigo] && (FICHAS[s0.codigo].itens||[]).length);
+  const producao = !!(FICHAS[s0.codigo] && (FICHAS[s0.codigo].itens||[]).length) && s0.classe !== "K" &&
+    !(FICHAS[s0.codigo].itens||[]).some(it => it.c === s0.codigo);
   const e = ef(s0);
   const box = document.createElement("div");
   box.className = "minip"; box.id = "minip";
@@ -3452,7 +3494,7 @@ function pintaMini(){
       escreverOCPlanilha(oc).then(async r=>{
         const reler = await depoisDeGravar();
         MINI = {novoOC: oc.numero, aviso: ((r.semCadastro || []).length
-          ? "Atenção: o SKU não está na aba Produtos — a linha entrou, mas sai 0 até cadastrar lá." : "") + (reler ? " " + reler : "")};
+          ? "O SKU não está na aba Produtos: a torre gravou o código direto na coluna SKU da linha. Vale cadastrar na aba Produtos depois." : "") + (reler ? " " + reler : "")};
         const s1 = PORCOD[s0.codigo];
         if (s1 && ABERTO === s0.codigo) abrirSku(s1); else pintaMini();
       }).catch(e=>{ okb.disabled = false; okb.textContent = "Registrar"; erro(String(e.message || e)); });
@@ -3725,7 +3767,7 @@ function mudancasOC(o, st){
       if (e.prevista && e.prevista !== l.data_prevista) campos.data_prevista = e.prevista;
       if (e.status != null && e.status !== (l.status_planilha || "")) campos.status = e.status;
       /* SKU escrito direto na coluna SKU desta linha (no lugar do PROCX que devolvia 0) */
-      if (e.sku && !l.sku) campos.sku = e.sku;
+      if (e.sku && (!l.sku || l.pelo_nome)) campos.sku = e.sku;
     }
     if (Object.keys(campos).length) mud.push({b:l.b, fp:l.fp, rot:"OC "+o.numero+" · "+nomeLinhaOC(l), campos, l});
   });
@@ -3759,8 +3801,10 @@ function telaOC(){
     if (e.cancelar) return '<div class="olin fech canc">'+nm+'<span class="stf">vai para <b>Cancelado</b> ao salvar · '+
       '<button class="link" data-eu="'+l.b+'">desfazer</button></span></div>';
     const q = e.qtd ?? l.qOC, d = e.prevista ?? l.data_prevista ?? "", s = e.status ?? (l.status_planilha || "");
-    const vinc = l.sku ? '' : '<div class="olin-vinc"><span>'+(e.sku
+    const vinc = (l.sku && !l.pelo_nome) ? '' : '<div class="olin-vinc"><span>'+(e.sku
         ? 'Vai ser vinculada a <b>'+esc(e.sku)+'</b> ao salvar · <button class="link" data-vx="'+l.b+'">desfazer</button>'
+        : l.pelo_nome
+        ? '<b>Ligada pelo nome do Tiny a '+esc(l.sku)+'</b> — já conta na cobertura, mas na planilha o SKU continua 0. Vincule para corrigir lá também:'
         : '<b>Sem SKU:</b> a descrição não bate com a aba Produtos, então esta linha não entra na cobertura. Vincule o SKU:')+
       '</span>'+(e.sku ? '' : '<div data-vinc="'+l.b+'"></div>')+'</div>';
     const opts = (ST_ABERTOS.includes(s) ? ST_ABERTOS : [s].concat(ST_ABERTOS)).map(x=>
@@ -4052,7 +4096,9 @@ function abrirFormOC(ordem){
     status: "aberta", por: USUARIO, em: HOJE_ISO
   };
   if (state.sel.size && !ordem){
+    state.ped.form.fora_fab = [];
     selecionados().forEach(x=>{
+      if (ehFabricado(x.codigo)){ state.ped.form.fora_fab.push(x.codigo); return; }
       const e = ef(x);
       state.ped.form.itens.push({c:x.codigo, qtd: Math.max(1, e.sugestao || 0), recebido: 0});
     });
@@ -4086,6 +4132,8 @@ function telaOrdem(){
     '<div class="ordform">'+
       '<div class="oh"><button class="link" id="o-voltar">← voltar para a lista</button>'+
         '<h2>'+(nova?"Nova ordem de compra":"Ordem "+esc(o.numero))+'</h2></div>'+
+      ((o.fora_fab||[]).length ? '<div class="avisinho">'+o.fora_fab.length+' produto(s) da seleção são <b>fabricados</b> (ficha homologada) '+
+        'e não entram em OC: o pedido deles é uma OP, pela gaveta de cada um — '+o.fora_fab.map(esc).join(", ")+'.</div>' : '')+
       '<div class="ogrid">'+
         '<label class="ocampo grande"><span>Fornecedor</span><div id="o-forn"></div></label>'+
         '<label class="ocampo"><span>Nº da OC</span>'+
@@ -4207,7 +4255,7 @@ function ligarFormOC(box){
       "Gravada na aba <b>OC's</b> da planilha, prevista para <b>" + dbr(o.data_prevista) + "</b>. " +
         (reler || "Já conta na cobertura dos itens."),
       (r.semCadastro || []).length ? "Atenção: " + r.semCadastro.map(esc).join(", ") +
-        " não está na aba Produtos — a linha entrou, mas o SKU sai 0 até cadastrar lá." : ""]);
+        " não está na aba Produtos — a torre gravou o código direto na coluna SKU. Vale cadastrar na aba Produtos depois." : ""]);
   };
 }
 
@@ -5295,7 +5343,7 @@ async function ocListOpen(token, siteId){
   const col = (r, k) => idx[k] === undefined ? null : (r[idx[k]] ?? null);
   const iso = _isoCel;
   const FECHADA = /entreg|receb|finaliz|conclu|cancel/i;
-  const out = [], semSku = [], todas = [];
+  const out = [], semSku = [], todas = [], pend = [];
   for (let i = 1; i < rows.length; i++){
     const r = rows[i];
     if (!r || r.every(v => v === null || v === "")) continue;
@@ -5319,13 +5367,8 @@ async function ocListOpen(token, siteId){
       data_pedido: iso(col(r,"data_pedido")), data_prevista: iso(col(r,"data_prevista")), data_entrega: entrega,
       status_planilha: stTxt, fechada, cancelada: /cancel/i.test(stTxt),
       falta: fechada ? 0 : Math.max(0, qOC - (qNF > 0 ? qNF : 0)) });
-    if (!temSku){
-      if (col(r,"descricao") || col(r,"quantidade")) semSku.push({
-        oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: stTxt});
-      continue;
-    }
-    out.push({
-      sku: skuTxt,
+    const obj = {
+      sku: temSku ? skuTxt : null,
       numero,
       key,
       linha: i - 1,
@@ -5342,9 +5385,14 @@ async function ocListOpen(token, siteId){
       leadtime: col(r,"leadtime"),
       status: fechada ? (/cancel/i.test(stTxt) ? "Cancelado" : "Entregue") : "Pendente",
       status_planilha: stTxt || null,
-    });
+    };
+    if (temSku){ out.push(obj); continue; }
+    if (col(r,"descricao") || col(r,"quantidade")){
+      semSku.push({oc: col(r,"numero"), descricao: String(col(r,"descricao")||"").trim(), status: stTxt, ref: obj});
+      pend.push(obj);
+    }
   }
-  out.semSku = semSku; out.todas = todas;
+  out.semSku = semSku; out.todas = todas; out.pendSku = pend;
   return out;
 }
 /* ---------- escreve a OC na planilha de BI (aba OC's, tabela Tabela1) ----------
@@ -5386,8 +5434,8 @@ async function escreverOCPlanilha(o){
     L[2]  = o.fornecedor || "";                                      /* Fornecedor */
     L[3]  = d || (P ? String(P.nome).toUpperCase() : it.c);          /* Descricao */
     L[4]  = "=XLOOKUP([@[Fornecedor:]],Listas!A:A,Listas!B:B,0)";    /* Origem */
-    L[5]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!C:C,0)"; /* SKU */
-    L[6]  = "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!E:E,0)"; /* Leadtime */
+    L[5]  = d ? "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!C:C,0)" : it.c;    /* SKU: sem cadastro na aba, vai o código */
+    L[6]  = d ? "=XLOOKUP([@[Descrição:]],Produtos!B:B,Produtos!E:E,0)" : leadDe(it.c); /* Leadtime */
     L[7]  = it.qtd || 0;                                             /* Quantidade OC */
     if (it.recebido) L[9] = it.recebido;                             /* Quantidade NF: o que ja veio */
     L[10] = _serialExcel(it.prevista || o.data_prevista);            /* Previsao/ETA */
@@ -5519,7 +5567,7 @@ async function mandarOCPlanilha(o){
     const r = await escreverOCPlanilha(o);
     o.planilha = { em: new Date().toISOString(), ok: true }; gravarOrdem(o.id);
     marca("<b>Gravada na planilha de BI</b> (aba OC's)." + (r.semCadastro.length
-      ? " Atenção: " + r.semCadastro.map(esc).join(", ") + " não está na aba Produtos — a linha entrou, mas o SKU vai sair 0 até cadastrar lá."
+      ? " " + r.semCadastro.map(esc).join(", ") + " não está na aba Produtos — a torre gravou o código direto na coluna SKU. Vale cadastrar na aba Produtos depois."
       : ""));
   } catch(e){
     o.planilha = { em: new Date().toISOString(), ok: false, erro: String(e.message||e) }; gravarOrdem(o.id);
@@ -5538,26 +5586,67 @@ const ocAberta = o => o.sku && o.status !== "Entregue" && o.status !== "Cancelad
    alguma ficha também vem, como insumo. Mudou o código, a categoria ou a origem no Tiny: muda aqui. */
 /* Código antigo → código novo no Tiny. A venda por NF anterior à troca está no código antigo;
    ela soma no novo, e ficha, registro e OC que ainda usem o antigo passam para o novo. */
-const DEPARA = {
-  "HLD-BP-NN-ESPUMA-150ml":    "PA0001",   /* Espuma Arretada 150ml */
-  "HLD-BPNN-FINALIZADOR-50ML": "PA0002",   /* Finalizador Norte Nordeste 50ml */
-  "HLD-BPNN-PRIMER-50ML":      "PA0003",   /* Primer Norte Nordeste 50ml */
-  "HLD-BP-NN-SERUM-5ML":       "PA0004",   /* Sérum Arretado 5ml */
-  "HLD-BP-DESC-20ML":          "PA0006",   /* Descolorante 20ml */
-};
+/* Cada grupo é o MESMO produto do Tiny (mesmo id) com dois códigos: o Tiny já trocou para
+   PA000x e depois voltou para o código antigo. Não existe direção fixa: vale o código que
+   está ATIVO no cadastro hoje, e o outro soma nele (venda, saldo, OC, ficha, registro, ordem). */
+const APELIDOS = [
+  ["HLD-BP-NN-ESPUMA-150ml",         "PA0001"],   /* Espuma Arretada 150ml */
+  ["HLD-BPNN-FINALIZADOR-50ML",      "PA0002"],   /* Finalizador Norte Nordeste 50ml */
+  ["HLD-BPNN-PRIMER-50ML",           "PA0003"],   /* Primer Norte Nordeste 50ml */
+  ["HLD-BP-NN-SERUM-5ML",            "PA0004"],   /* Sérum Arretado 5ml */
+  ["HLD-BP-REM-GEL-2EM1-5G",         "PA0005"],   /* Removedor de cola 2 em 1 5g */
+  ["HLD-BP-DESC-20ML",               "PA0006"],   /* Descolorante 20ml */
+  ["HLD-BP-KIT-BARBA-CAS.CLARO-50G", "PA0007"],   /* Kit barba castanho claro 50g */
+];
+let DEPARA = {}, APELIDOS_OK = false;
+function definirApelidos(produtos){
+  const ativos = new Set((produtos || [])
+    .filter(p => String(p.situacao || "A").trim().toUpperCase() === "A")
+    .map(p => String(p.codigo || "").trim()));
+  DEPARA = {};
+  APELIDOS_OK = ativos.size > 0;
+  APELIDOS.forEach(g=>{
+    const can = g.find(c => ativos.has(c)) || g[0];
+    g.forEach(c=>{ if (c !== can) DEPARA[c] = can; });
+  });
+}
+definirApelidos([]);
 const codNovo = c => DEPARA[c] || c;
 function migrarCodigos(){
+  if (!APELIDOS_OK) return;      /* só depois de ler o cadastro: é ele que diz qual código vale hoje */
   Object.entries(DEPARA).forEach(([velho, novo])=>{
     if (FICHAS[velho]){
-      if (!FICHAS[novo]){ FICHAS[novo] = FICHAS[velho]; gravarFicha(novo); }
+      /* as duas existem: fica a homologada; empatou, fica a mais recente */
+      const a = FICHAS[novo], b = FICHAS[velho];
+      const ok = f => f && f.estado === "completa";
+      const fica = !a ? b : ok(a) !== ok(b) ? (ok(b) ? b : a) : (String(b.em || "") > String(a.em || "") ? b : a);
+      if (fica !== a){ FICHAS[novo] = fica; gravarFicha(novo); }
       delete FICHAS[velho]; apagarFicha(velho);
     }
-    if (REG[velho]){ if (!REG[novo]) REG[novo] = REG[velho]; delete REG[velho]; }
+    if (REG[velho]){
+      const a = REG[novo] || {}, b = REG[velho];
+      const junta = (x, y) => { const vis = {}; return (x||[]).concat(y||[]).filter(r => { const k = JSON.stringify(r); if (vis[k]) return false; vis[k] = 1; return true; }); };
+      const m = Object.assign({}, b, a);
+      m.rupturas = junta(a.rupturas, b.rupturas); m.notas = junta(a.notas, b.notas);
+      if (b.leadtime != null && (a.leadtime == null || String(b.quandoLead || "") > String(a.quandoLead || ""))){
+        m.leadtime = b.leadtime; m.quemLead = b.quemLead; m.quandoLead = b.quandoLead; }
+      if (!a.rupAutoIni && b.rupAutoIni) m.rupAutoIni = b.rupAutoIni;
+      REG[novo] = m; delete REG[velho];
+      if (DB) DB.doc("registros/" + idDoc(velho)).delete().catch(()=>{});
+    }
   });
   Object.keys(FICHAS).forEach(pai=>{
     let mudou = false;
     (FICHAS[pai].itens || []).forEach(it=>{ if (DEPARA[it.c]){ it.c = DEPARA[it.c]; mudou = true; } });
     if (mudou) gravarFicha(pai);
+  });
+  /* ordens de produção e de compra registradas na torre também seguem o código ativo */
+  Object.keys(ORDENS || {}).forEach(id=>{
+    const o = ORDENS[id]; let m = false;
+    if (o.produto && DEPARA[o.produto]){ o.produto = DEPARA[o.produto]; m = true; }
+    (o.itens || []).forEach(it=>{ if (DEPARA[it.c]){ it.c = DEPARA[it.c]; m = true; } });
+    (o.comp || []).forEach(it=>{ if (DEPARA[it.c]){ it.c = DEPARA[it.c]; m = true; } });
+    if (m) gravarOrdem(id);
   });
   salvarFichas(); salvarReg();
 }
@@ -5583,14 +5672,25 @@ function selFabrica(id, atual, rotuloVazio){
   return '<select id="'+id+'" class="fabsel">'+ops.map(([v, t]) =>
     '<option value="'+esc(v)+'"'+(v === (atual || "") ? ' selected' : '')+'>'+esc(t)+'</option>').join("")+'</select>';
 }
+function normNome(t){
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase()
+    .replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim();
+}
 function escopoDoTiny(p){
   const m = /^(\d)\./.exec(String(p.categoria || "").trim()), d = m ? +m[1] : null;
   const cl = String(p.classe_produto || "S").trim().toUpperCase() || "S";
   if (cl === "M" || d === 0) return "insumo";
   if (d !== null && d >= 1 && d <= 4) return "acabado";
+  /* categoria sem o número do padrão (ex.: "Extensao de Cilios >> Cola…"): produto vendável
+     não pode sumir da torre por isso. Entra como acabado e fica avisado para corrigir no Tiny. */
+  const catTxt = String(p.categoria || "").trim();
+  if (d === null && catTxt && (cl === "S" || cl === "F") && !/marketing|brinde|insumo|amostra/i.test(catTxt)){
+    p._catFora = true; return "acabado";
+  }
   return null;
 }
 function montarCatalogo(k){
+  definirApelidos(k.produtos);
   migrarCodigos();
   const antigos = {}; DATA.skus.forEach(x=>{ antigos[x.codigo] = x; });
   const usados = new Set();
@@ -5612,6 +5712,7 @@ function montarCatalogo(k){
     x.categoria = cat[0] || "Sem categoria no Tiny"; x.subcategoria = cat[1] || "";
     x.marca = p.marca || "Sem marca no cadastro";
     x.classe = cl;
+    x.cat_fora = !!p._catFora;
     x.classe_label = {S:"Simples", K:"Kit", V:"Produto pai", F:"Fabricado", M:"Matéria-prima"}[cl] || cl;
     x.origem = imp ? "1" : "0"; x.origem_label = imp ? "Importado" : "Nacional";
     x.seguranca = imp ? 63 : 21; x.leadtime = DATA.leadtime; x.alvo = x.leadtime + x.seguranca;
@@ -5672,15 +5773,31 @@ function aplicarAoVivo(k, ocs){
   });
   DEPOSITOS.sort();
   (k.produtos||[]).forEach(p => { if (p.codigo) prod[p.codigo] = p; });
-  (k.estoque||[]).forEach(r => { if (r.codigo) est[r.codigo] = r; });
+  (k.estoque||[]).forEach(r => { if (!r.codigo) return; const c = codNovo(String(r.codigo).trim());
+    if (!est[c] || String(r.codigo).trim() === c) est[c] = r; });
   /* aceita o nome de coluna das consultas de pedido (itens_codigo/qtd_30d) ou das de NF (sku/qtd) */
   (k.v30||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c){ const n = codNovo(c); v30[n] = (v30[n] || 0) + _toNum(r.qtd_30d ?? r.qtd); } });
   (k.v3m||[]).forEach(r => { const c = r.itens_codigo || r.sku; if (c) v3m[c] = (r.qtd_3m ?? r.qtd); });
 
-  const cheg = {};
+  /* OC sem SKU na planilha (o PROCX não achou a descrição na aba Produtos — ex.: OC lançada
+     pela torre com o nome exato do Tiny): liga pelo nome do produto no cadastro do Tiny */
+  const porNome = {};
+  (k.produtos || []).forEach(p=>{
+    if (String(p.situacao || "A").trim().toUpperCase() !== "A") return;
+    const n = normNome(p.nome), c = String(p.codigo || "").trim();
+    if (n && c) porNome[n] = c;
+  });
+  (ocs.pendSku || []).forEach(o=>{
+    const c = porNome[normNome(o.produto_nome)]; if (!c) return;
+    o.sku = c; o.sku_pelo_nome = true; ocs.push(o);
+    (ocs.semSku || []).forEach(x=>{ if (x.ref === o) x.resolvido = c; });
+    const l = (ocs.todas || []).find(l => l.b === o.linha); if (l){ l.sku = c; l.pelo_nome = true; }
+  });
+  const cheg = {}, chegTot = {};
   ocs.forEach(o=>{ if (o.sku) o.sku = codNovo(o.sku); });
   (ocs.todas || []).forEach(l=>{ if (l.sku) l.sku = codNovo(l.sku); });
   ocs.filter(ocAberta).forEach(o=>{
+    chegTot[o.sku] = (chegTot[o.sku] || 0) + _toNum(o.quantidade);
     const a = cheg[o.sku];
     if (!a || o.data_prevista < a.d) cheg[o.sku] = {d:o.data_prevista, q:_toNum(o.quantidade), f:o.fornecedor};
     else if (o.data_prevista === a.d) a.q += _toNum(o.quantidade);
@@ -5710,16 +5827,22 @@ function aplicarAoVivo(k, ocs){
     const media = fechValidos.length ? soma / fechValidos.length : 0;
     const q30 = _toNum(v30[s.codigo]);
     s.q30 = q30; s.q90 = soma; s.media_mes = media; s.venda_diaria = media / 30;
-    s.trocou = s.usando_30d = false;
     s.gatilho_alta = media > 0 && q30 > 1.5 * media;
     s.gatilho_queda = media > 0 && q30 <= 0.5 * media;
+    /* troca de régua: os últimos 30 dias viram o patamar novo quando passam de 1,5× a média
+       ou caem a metade dela. Ruptura recente desfaz a queda — faltou produto, não demanda.
+       A matéria-prima acompanha sozinha, porque a demanda dela é explodida da dos pais. */
+    s.troca_desfeita = s.gatilho_queda && teveRupturaRecente(s.codigo, hojeIso);
+    s.trocou = s.usando_30d = (s.gatilho_alta || s.gatilho_queda) && !s.troca_desfeita;
+    if (s.trocou) s.venda_diaria = q30 / 30;
     s.aceleracao = media > 0 ? q30 / media : (q30 === 0 ? null : Infinity);
     s.sem_historico = false; s.alt3m = null;
     s.meses_media = fechValidos.map(MESES_ROT).join(", ");
     const c = cheg[s.codigo];
     s.chegada_data = c ? c.d : null; s.chegada_qtd = c ? c.q : null; s.chegada_forn = c ? c.f : null;
+    s.chegada_total = c ? (chegTot[s.codigo] || c.q) : null;
     s.forn_atrasado = !!(c && c.d < hojeIso);
-    CHEG_BASE[s.codigo] = {d:s.chegada_data, q:s.chegada_qtd, f:s.chegada_forn, res:s.reservado || 0};
+    CHEG_BASE[s.codigo] = {d:s.chegada_data, q:s.chegada_qtd, f:s.chegada_forn, t:s.chegada_total, res:s.reservado || 0};
   });
   DATA.ocs = ocs;
   AO_VIVO = true; IGNORA_SIM = false;
@@ -5733,7 +5856,16 @@ function aplicarAoVivo(k, ocs){
 /* A ruptura detectada pelo saldo ganha data de início no primeiro dia em que aparece e, quando
    o saldo volta, vira registro fechado (início → fim) com o motivo anotado. Sem isso o início
    era sempre "hoje" e a ruptura sumia do histórico no dia em que acabava. */
+function teveRupturaRecente(cod, hoje){
+  const r = temReg(cod); if (!r) return false;
+  if (r.rupAutoIni) return true;
+  const lim = maisDias(hoje, -30);
+  return (r.rupturas || []).some(x => !x.fim || x.fim >= lim);
+}
 function acompanharRupturas(hoje){
+  /* sem os registros do banco, "não tem início gravado" é falso: abriria a ruptura hoje e
+     passaria por cima do início, do leadtime e das notas que os outros salvaram */
+  if (DB && !REG_PRONTO) return;
   let mudou = false;
   DATA.skus.forEach(s=>{
     const r = temReg(s.codigo);
@@ -5822,7 +5954,13 @@ function pintaFonte(res, ocs){
       res.semKondado.slice(0, 12).map(esc).join(", ") + (res.semKondado.length > 12 ? "…" : "") : "") +
     ((res.sumidos || []).length ? " · <b>" + res.sumidos.length + " código(s) de ficha que não existem mais ativos no Tiny</b>: " +
       res.sumidos.map(esc).join(", ") : "") + "." +
-    (() => { const ab = (ocs.semSku||[]).filter(x => !/entreg|cancel/i.test(x.status));
+    (() => { const lig = (ocs.semSku||[]).filter(x => x.resolvido && !/entreg|cancel/i.test(x.status));
+      return lig.length ? " " + lig.length + " linha(s) de OC sem SKU na planilha foram ligadas pelo nome do produto no Tiny: " +
+        lig.map(x => "OC " + esc(x.oc) + " → " + esc(x.resolvido)).join("; ") + "." : ""; })() +
+    (() => { const cf = DATA.skus.filter(s => s.cat_fora);
+      return cf.length ? " <b>" + cf.length + " produto(s) com categoria fora do padrão no Tiny</b> (sem o número 1. a 4.) — entram como acabado, mas vale corrigir lá: " +
+        cf.map(s => esc(s.codigo)).join(", ") + "." : ""; })() +
+    (() => { const ab = (ocs.semSku||[]).filter(x => !x.resolvido && !/entreg|cancel/i.test(x.status));
       return ab.length ? " <b>" + ab.length + " linhas de OC em aberto sem SKU</b> (a descrição não bate com a aba Produtos) ficaram fora da cobertura: " +
         ab.map(x => "OC " + esc(x.oc) + " – " + esc(x.descricao)).join("; ") + "." : ""; })();
 }
